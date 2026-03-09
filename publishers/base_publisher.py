@@ -114,17 +114,23 @@ class BaseSupermarketDataPublisher:
                     try:
                         scraper_cls = ScraperFactory.get(scraper_name)
                         storage_path = scraper_cls(folder_name=self.data_folder).get_storage_path()
+                        # Create the folder now so markers can be placed before the scraper runs
+                        os.makedirs(storage_path, exist_ok=True)
                         scraper_path_map[scraper_name] = storage_path
-                    except Exception:
-                        pass
+                        Logger.info(f"[marker-prep] scraper={scraper_name} -> folder={storage_path}")
+                    except Exception as e:
+                        Logger.warning(f"[marker-prep] Failed to resolve path for scraper {scraper_name}: {e}")
 
+                Logger.info(f"[marker-prep] Got {len(metadata)} processed files from DB to evaluate for markers.")
                 skipped_prep_count = 0
+                unknown_chains = set()
                 for item in metadata:
                     f_name = item["file_name"]   # e.g. "Price123.xml" (post-parse name)
                     c_name = item["chain_name"]  # e.g. "OSHER_AD"
 
                     storage_path = scraper_path_map.get(c_name)
-                    if not storage_path or not os.path.exists(storage_path):
+                    if not storage_path:
+                        unknown_chains.add(c_name)
                         continue
 
                     # The FTP file may be compressed (.gz) while the DB stores the
@@ -139,11 +145,12 @@ class BaseSupermarketDataPublisher:
                                 with open(marker_path, 'w') as mf:
                                     mf.write("marker")
                                 skipped_prep_count += 1
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                Logger.warning(f"[marker-prep] Could not write marker {marker_path}: {e}")
 
-                if skipped_prep_count > 0:
-                    Logger.info(f"Created {skipped_prep_count} dummy markers to skip redundant downloads.")
+                if unknown_chains:
+                    Logger.warning(f"[marker-prep] {len(unknown_chains)} chain(s) in DB not matched to an enabled scraper: {unknown_chains}")
+                Logger.info(f"[marker-prep] Created {skipped_prep_count} dummy markers to skip redundant downloads.")
 
             ScarpingTask(
                 enabled_scrapers=self.enabled_scrapers,

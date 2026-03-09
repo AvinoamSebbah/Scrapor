@@ -32,9 +32,8 @@ jobs:
   scrape-convert:
     name: "${{ matrix.store }}"
     runs-on: ubuntu-latest
-    if: ${{ inputs.enabled_scrapers == '' || contains(inputs.enabled_scrapers, matrix.store) }}
     permissions:
-      actions: write   # nécessaire pour déclencher workflow_dispatch
+      actions: write
     strategy:
       fail-fast: false
       max-parallel: 10
@@ -77,19 +76,34 @@ jobs:
           - WOLT
 
     steps:
+      # Si un input manuel est fourni et ne contient pas ce store → skip tout
+      - name: Check if this store is requested
+        id: check
+        run: |
+          REQUESTED="${{ inputs.enabled_scrapers }}"
+          if [ -z "$REQUESTED" ] || echo ",$REQUESTED," | grep -q ",${{ matrix.store }},"; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout code
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
+        if: steps.check.outputs.enabled == 'true'
         run: pip install -r requirements.txt
 
       - name: Scrape, Convert, Clean
+        if: steps.check.outputs.enabled == 'true'
         env:
           OUTPUT_DESTINATION: supabase
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
@@ -103,6 +117,7 @@ jobs:
         run: python main.py
 
       - name: Upload outputs artifact
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: outputs-${{ matrix.store }}
@@ -112,10 +127,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      # Déclenche l'upload Supabase dès que ce magasin est prêt
-      # Le concurrency group dans _prod_upload.yml garantit qu'un seul tourne à la fois
       - name: Trigger Supabase upload for ${{ matrix.store }}
-        if: success()
+        if: steps.check.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

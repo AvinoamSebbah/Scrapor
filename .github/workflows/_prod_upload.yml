@@ -1,0 +1,68 @@
+name: Production | Upload Store to Supabase
+
+on:
+  workflow_dispatch:
+    inputs:
+      store:
+        description: 'Nom du magasin (ex: SHUFERSAL)'
+        required: true
+        type: string
+      run_id:
+        description: 'ID du workflow run qui a produit les artifacts'
+        required: true
+        type: string
+
+# Garantit qu'un seul upload tourne à la fois, toutes origines confondues.
+# Les autres attendent leur tour dans la queue (ne sont pas annulés).
+concurrency:
+  group: supabase-upload
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: "Upload ${{ inputs.store }} → Supabase"
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read   # nécessaire pour télécharger des artifacts d'un autre run
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download artifact from scrape run
+        uses: actions/download-artifact@v4
+        with:
+          name: outputs-${{ inputs.store }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./app_data/
+
+      - name: Restore folder structure from artifact
+        run: |
+          # L'artifact contient outputs/ et status/ à la racine de app_data/
+          # downloads-artifact les place dans app_data/ directement
+          mkdir -p ./app_data/dumps/status
+          # Déplacer les fichiers status/ vers dumps/status/ si présents
+          if [ -d ./app_data/status ]; then
+            mv ./app_data/status/* ./app_data/dumps/status/ 2>/dev/null || true
+          fi
+
+      - name: Upload to Supabase
+        env:
+          OUTPUT_DESTINATION: supabase
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          OPERATION: api_update
+          ENABLED_SCRAPERS: ${{ inputs.store }}   # scope l'upload à ce seul magasin
+          APP_DATA_PATH: ./app_data
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+        run: python main.py

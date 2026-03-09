@@ -8,73 +8,73 @@ on:
     inputs:
       enabled_scrapers:
         description: >
-          Magasins à scraper (séparés par virgule).
-          Laisser vide = tous les magasins actifs par défaut.
-          Valeurs possibles: BAREKET, YAYNO_BITAN_AND_CARREFOUR, COFIX,
-          CITY_MARKET_KIRYATGAT, CITY_MARKET_SHOPS, DOR_ALON, GOOD_PHARM,
-          HAZI_HINAM, HET_COHEN, KESHET, KING_STORE, MAAYAN_2000,
-          MAHSANI_ASHUK, NETIV_HASED, MESHMAT_YOSEF_1, MESHMAT_YOSEF_2,
-          OSHER_AD, POLIZER, RAMI_LEVY, SALACH_DABACH, SHEFA_BARCART_ASHEM,
-          SHUFERSAL, SHUK_AHIR, STOP_MARKET, SUPER_PHARM, SUPER_YUDA,
-          SUPER_SAPIR, FRESH_MARKET_AND_SUPER_DOSH, QUIK, TIV_TAAM,
-          VICTORY, YELLOW, YOHANANOF, ZOL_VEBEGADOL, WOLT
+          Magasins à scraper (séparés par virgule, vide = tous).
+          Ex: SHUFERSAL,RAMI_LEVY,VICTORY
         required: false
         default: ''
       enabled_file_types:
         description: >
-          Types de fichiers à collecter (séparés par virgule).
-          Laisser vide = tous les types.
-          Valeurs possibles: PRICE_FILE, PRICE_FULL_FILE, PROMO_FILE, PROMO_FULL_FILE, STORE_FILE
+          Types de fichiers (séparés par virgule, vide = tous).
+          Valeurs: PRICE_FILE, PRICE_FULL_FILE, PROMO_FILE, PROMO_FULL_FILE, STORE_FILE
         required: false
         default: ''
       limit:
-        description: 'Nombre max de fichiers par magasin (laisser vide = pas de limite)'
+        description: 'Nombre max de fichiers par magasin (vide = pas de limite)'
         required: false
         default: ''
 
-env:
-  # --- Liste des magasins actifs par défaut ---
-  # Pour en désactiver un, commentez la ligne correspondante
-  DEFAULT_SCRAPERS: >-
-    BAREKET,
-    YAYNO_BITAN_AND_CARREFOUR,
-    COFIX,
-    CITY_MARKET_KIRYATGAT,
-    CITY_MARKET_SHOPS,
-    DOR_ALON,
-    GOOD_PHARM,
-    HAZI_HINAM,
-    HET_COHEN,
-    KESHET,
-    KING_STORE,
-    MAAYAN_2000,
-    MAHSANI_ASHUK,
-    NETIV_HASED,
-    MESHMAT_YOSEF_1,
-    MESHMAT_YOSEF_2,
-    OSHER_AD,
-    POLIZER,
-    RAMI_LEVY,
-    SALACH_DABACH,
-    SHEFA_BARCART_ASHEM,
-    SHUFERSAL,
-    SHUK_AHIR,
-    STOP_MARKET,
-    SUPER_PHARM,
-    SUPER_YUDA,
-    SUPER_SAPIR,
-    FRESH_MARKET_AND_SUPER_DOSH,
-    QUIK,
-    TIV_TAAM,
-    VICTORY,
-    YELLOW,
-    YOHANANOF,
-    ZOL_VEBEGADOL,
-    WOLT
-
 jobs:
-  scrape:
+  # -------------------------------------------------------
+  # 1 job par magasin — tous en parallèle
+  # Dès qu'un job finit, il déclenche _prod_upload.yml
+  # Pour désactiver un magasin, commentez son entrée dans matrix.store
+  # -------------------------------------------------------
+  scrape-convert:
+    name: "${{ matrix.store }}"
     runs-on: ubuntu-latest
+    if: ${{ inputs.enabled_scrapers == '' || contains(inputs.enabled_scrapers, matrix.store) }}
+    permissions:
+      actions: write   # nécessaire pour déclencher workflow_dispatch
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        store:
+          - BAREKET
+          - YAYNO_BITAN_AND_CARREFOUR
+          - COFIX
+          - CITY_MARKET_KIRYATGAT
+          - CITY_MARKET_SHOPS
+          - DOR_ALON
+          - GOOD_PHARM
+          - HAZI_HINAM
+          - HET_COHEN
+          - KESHET
+          - KING_STORE
+          - MAAYAN_2000
+          - MAHSANI_ASHUK
+          - NETIV_HASED
+          - MESHMAT_YOSEF_1
+          - MESHMAT_YOSEF_2
+          - OSHER_AD
+          - POLIZER
+          - RAMI_LEVY
+          - SALACH_DABACH
+          - SHEFA_BARCART_ASHEM
+          - SHUFERSAL
+          - SHUK_AHIR
+          - STOP_MARKET
+          - SUPER_PHARM
+          - SUPER_YUDA
+          - SUPER_SAPIR
+          - FRESH_MARKET_AND_SUPER_DOSH
+          - QUIK
+          - TIV_TAAM
+          - VICTORY
+          - YELLOW
+          - YOHANANOF
+          - ZOL_VEBEGADOL
+          - WOLT
 
     steps:
       - name: Checkout code
@@ -89,33 +89,37 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Resolve active scrapers
-        id: resolve
-        run: |
-          # Si un input manuel est fourni, on l'utilise ; sinon on prend la liste par défaut
-          if [ -n "${{ inputs.enabled_scrapers }}" ]; then
-            SCRAPERS="${{ inputs.enabled_scrapers }}"
-          else
-            # Nettoyer les espaces et sauts de ligne de DEFAULT_SCRAPERS
-            SCRAPERS=$(echo "$DEFAULT_SCRAPERS" | tr -d ' \n')
-          fi
-          echo "scrapers=$SCRAPERS" >> $GITHUB_OUTPUT
-
-          FILE_TYPES="${{ inputs.enabled_file_types }}"
-          echo "file_types=$FILE_TYPES" >> $GITHUB_OUTPUT
-
-          LIMIT="${{ inputs.limit }}"
-          echo "limit=$LIMIT" >> $GITHUB_OUTPUT
-
-      - name: Run scraping
+      - name: Scrape, Convert, Clean
         env:
           OUTPUT_DESTINATION: supabase
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
-          OPERATION: scraping,converting,clean_dump_files,api_update
-          ENABLED_SCRAPERS: ${{ steps.resolve.outputs.scrapers }}
-          ENABLED_FILE_TYPES: ${{ steps.resolve.outputs.file_types }}
-          LIMIT: ${{ steps.resolve.outputs.limit }}
+          OPERATION: scraping,converting,clean_dump_files
+          ENABLED_SCRAPERS: ${{ matrix.store }}
+          ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}
+          LIMIT: ${{ inputs.limit }}
           APP_DATA_PATH: ./app_data
           LOG_LEVEL: WARNING
           TZ: Asia/Jerusalem
         run: python main.py
+
+      - name: Upload outputs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: outputs-${{ matrix.store }}
+          path: |
+            ./app_data/outputs/
+            ./app_data/dumps/status/
+          if-no-files-found: ignore
+          retention-days: 1
+
+      # Déclenche l'upload Supabase dès que ce magasin est prêt
+      # Le concurrency group dans _prod_upload.yml garantit qu'un seul tourne à la fois
+      - name: Trigger Supabase upload for ${{ matrix.store }}
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run _prod_upload.yml \
+            --ref ${{ github.ref_name }} \
+            -f store=${{ matrix.store }} \
+            -f run_id=${{ github.run_id }}

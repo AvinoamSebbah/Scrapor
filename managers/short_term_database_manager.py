@@ -1,0 +1,180 @@
+import os
+import pandas as pd
+import json
+from utils import Logger
+from remotes import ShortTermDatabaseUploader
+from managers.cache_manager import CacheManager, CacheState
+from managers.large_file_push_manager import LargeFilePushManager
+from data_models.raw_schema import ParserStatus, ScraperStatus
+from datetime import datetime
+
+
+class ShortTermDBDatasetManager:
+    def __init__(
+        self,
+        app_folder,
+        outputs_folder,
+        status_folder,
+        short_term_db_target: ShortTermDatabaseUploader,
+        enabled_scrapers: list[str],
+        enabled_file_types: list[str],
+    ):
+        self.app_folder = app_folder
+        self.uploader = short_term_db_target
+        self.outputs_folder = outputs_folder
+        self.status_folder = status_folder
+        self.enabled_scrapers = enabled_scrapers
+        self.enabled_file_types = enabled_file_types
+
+    def _push_parser_status(self, local_cahce: CacheState):
+        with open(f"{self.outputs_folder}/parser-status.json", "r") as file:
+            records = json.load(file)
+
+        pushed_timestamps = local_cahce.get_pushed_timestamps("parser-status.json")
+        added_timestamps = []
+        processed_records = []
+
+        for record in records:
+            if record["when_date"] not in pushed_timestamps:
+                try:
+                    processed_records.append(
+                        ParserStatus(
+                            index=ParserStatus.to_index(
+                                record["file_type"],
+                                record["store_enum"],
+                                record["when_date"],
+                            ),
+                            when_date=record["when_date"],
+                            requested_limit=record["limit"],
+                            requested_store_enum=record["store_enum"],
+                            requested_file_type=record["file_type"],
+                            scaned_data_folder=record["data_folder"],
+                            output_folder=record["output_folder"],
+                            status=record["status"],
+                            response=record["response"],
+                        ).to_dict()
+                    )
+                except Exception as e:
+                    Logger.error(f"Error processing record: {e}")
+                    continue
+                added_timestamps.append(record["when_date"])
+
+        self.uploader._insert_to_destinations(
+            ParserStatus.get_table_name(), processed_records
+        )
+
+        local_cahce.update_pushed_timestamps(
+            "parser-status.json", list(set(added_timestamps)) + pushed_timestamps
+        )
+
+        Logger.info("Parser status stored in DynamoDB successfully.")
+
+    def _push_status_files(self, local_cahce: CacheState):
+        for file in os.listdir(self.status_folder):
+            if not file.endswith(".json") or file == "index.json":
+                Logger.warning(f"Skipping '{file}', should we store it?")
+                continue
+            
+            # Filter by enabled scrapers
+            file_base = file.split(".")[0].lower()
+            if self.enabled_scrapers and not any(s.lower() in file_base for s in self.enabled_scrapers):
+                Logger.info(f"Skipping status file '{file}' as scraper is not enabled.")
+                continue
+
+            self._push_scraper_status(file, local_cahce)
+
+        self._push_parser_status(local_cahce)
+
+    def _push_scraper_status(self, file_name: str, local_cahce: CacheState):
+
+        with open(os.path.join(self.status_folder, file_name), "r") as f:
+            data = json.load(f)
+
+        pushed_timestamp = local_cahce.get_pushed_timestamps(file_name)
+        Logger.info(f"Pushing {file_name}: already pushed {pushed_timestamp}")
+
+        records = []
+        for index, (timestamp, actions) in enumerate(data.items()):
+
+            if timestamp == "verified_downloads":
+                continue
+
+            if timestamp in pushed_timestamp:
+                continue
+
+            Logger.info(f"Pushing {file_name}: {timestamp}")
+            for action in actions:
+                records.append(
+                    ScraperStatus(
+                        index=ScraperStatus.to_index(
+                            file_name.split(".")[0],
+                            action["status"],
+                            timestamp,
+                            str(index),
+                        ),
+                        file_name=file_name.split(".")[0],
+                        timestamp=datetime.strptime(timestamp, "%Y%m%d%H%M%S").strftime(
+                            "%Y-%m-%d %H:%M:%S.%f%z"
+                        ),
+                        status=action["status"],
+                        when=action["when"],
+                        status_data={
+                            key: value
+                            for key, value in action.items()
+                            if key != "status" and key != "when"
+                        },
+                    ).to_dict()
+                )
+
+            pushed_timestamp.append(timestamp)
+
+        local_cahce.update_pushed_timestamps(file_name, pushed_timestamp)
+
+        self.uploader._insert_to_destinations(ScraperStatus.get_table_name(), records)
+
+    def _push_files_data(self, local_cahce: CacheState):
+        # Fetch processed files from DB if possible to skip already done XML files
+        processed_files = set()
+        if hasattr(self.uploader, "get_processed_files_names"):
+            processed_files = self.uploader.get_processed_files_names()
+            Logger.info(f"Supabase sync: Found {len(processed_files)} processed files in DB.")
+
+        for file in sorted(os.listdir(self.outputs_folder), key=lambda x: ("store" not in x.lower(), x)):
+            if not file.endswith(".csv"):
+                if file != "parser-status.json":
+                    Logger.warning(f"Skipping '{file}', should we store it?")
+                continue
+            
+            # Filter by enabled scrapers
+            # Usually files are named like price_full_file_osher_ad.csv
+            if self.enabled_scrapers and not any(s.lower() in file.lower() for s in self.enabled_scrapers):
+                Logger.info(f"Skipping output file '{file}' as scraper is not enabled.")
+                continue
+
+            large_file_pusher = LargeFilePushManager(
+                self.outputs_folder, self.uploader, processed_files=processed_files
+            )
+            large_file_pusher.process_file(file, local_cahce)
+
+
+        Logger.info("Files data pushed in DynamoDB successfully.")
+
+    def upload(self, force_restart=False):
+        """
+        Upload the data to the database.
+        """
+        with CacheManager(self.app_folder) as local_cache:
+            if local_cache.is_empty() or force_restart:
+                self.uploader.restart_database(
+                    self.enabled_scrapers, self.enabled_file_types
+                )
+                
+                # If the uploader supports syncing cache from DB (like Supabase), do it here
+                if hasattr(self.uploader, "sync_cache"):
+                    self.uploader.sync_cache(local_cache)
+
+            # push
+            self._push_status_files(local_cache)
+            self._push_files_data(local_cache)
+
+        Logger.info("Upload completed successfully.")

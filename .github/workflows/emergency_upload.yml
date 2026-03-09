@@ -1,0 +1,15 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Production | Emergency Upload No Compose
+
+on: 
+  workflow_dispatch:
+    
+jobs:
+  call-workflow:
+    uses: OpenIsraeliSupermarkets/daily-publish-supermarket-data/.github/workflows/template.yml@main
+    with:
+      kaggle_dataset_remote_name: "israeli-supermarkets-2024"
+      operation: "upload_no_compose"
+    secrets: inherit

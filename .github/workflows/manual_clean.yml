@@ -1,0 +1,15 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: Production | Clean ALL
+
+on: 
+  workflow_dispatch:
+    
+jobs:
+  call-workflow:
+    uses: OpenIsraeliSupermarkets/daily-publish-supermarket-data/.github/workflows/template.yml@main
+    with:
+      kaggle_dataset_remote_name: "israeli-supermarkets-2024"
+      operation: "clean_dump_files,clean_all_source_data"
+    secrets: inherit

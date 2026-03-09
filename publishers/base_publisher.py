@@ -106,31 +106,42 @@ class BaseSupermarketDataPublisher:
             self._sync_remote_state()
             if hasattr(self.short_term_db_target, "get_processed_files_metadata"):
                 metadata = self.short_term_db_target.get_processed_files_metadata()
-                
+
+                # Build a precise map: chain_name (e.g. "OSHER_AD") -> real storage path
+                # using ScraperFactory so we never rely on brittle name guessing.
+                scraper_path_map = {}
+                for scraper_name in self.enabled_scrapers:
+                    try:
+                        scraper_cls = ScraperFactory.get(scraper_name)
+                        storage_path = scraper_cls(folder_name=self.data_folder).get_storage_path()
+                        scraper_path_map[scraper_name] = storage_path
+                    except Exception:
+                        pass
+
                 skipped_prep_count = 0
                 for item in metadata:
-                    f_name = item["file_name"]
-                    c_name = item["chain_name"]
-                    
-                    # Heuristic to find the correct scraper folder
-                    possibilities = [
-                        c_name, 
-                        c_name.lower(), 
-                        c_name.replace("_", "").capitalize(),
-                        c_name.replace("_", " ").title().replace(" ", "")
-                    ]
-                    
-                    for folder_candidate in set(possibilities):
-                        candidate_path = os.path.join(self.data_folder, folder_candidate)
-                        if os.path.exists(candidate_path):
-                            file_marker = os.path.join(candidate_path, f_name)
-                            if not os.path.exists(file_marker):
-                                try:
-                                    with open(file_marker, 'w') as f:
-                                        f.write("marker") # Create a small marker file
-                                    skipped_prep_count += 1
-                                except: pass
-                                
+                    f_name = item["file_name"]   # e.g. "Price123.xml" (post-parse name)
+                    c_name = item["chain_name"]  # e.g. "OSHER_AD"
+
+                    storage_path = scraper_path_map.get(c_name)
+                    if not storage_path or not os.path.exists(storage_path):
+                        continue
+
+                    # The FTP file may be compressed (.gz) while the DB stores the
+                    # parsed name (.xml).  Create a marker for both variants so the
+                    # scraper's disk-based filter recognises the file regardless of
+                    # which extension the remote server uses.
+                    base_name = os.path.splitext(f_name)[0]
+                    for marker_name in (base_name + ".gz", f_name):
+                        marker_path = os.path.join(storage_path, marker_name)
+                        if not os.path.exists(marker_path):
+                            try:
+                                with open(marker_path, 'w') as mf:
+                                    mf.write("marker")
+                                skipped_prep_count += 1
+                            except Exception:
+                                pass
+
                 if skipped_prep_count > 0:
                     Logger.info(f"Created {skipped_prep_count} dummy markers to skip redundant downloads.")
 

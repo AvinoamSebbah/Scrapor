@@ -107,49 +107,41 @@ class BaseSupermarketDataPublisher:
             if hasattr(self.short_term_db_target, "get_processed_files_metadata"):
                 metadata = self.short_term_db_target.get_processed_files_metadata()
 
-                # Build a precise map: chain_name (e.g. "OSHER_AD") -> real storage path
-                # using ScraperFactory so we never rely on brittle name guessing.
-                scraper_path_map = {}
+                # Resolve the real storage path for every enabled scraper and
+                # create the folder upfront so we can write markers into it.
+                all_storage_paths = []
                 for scraper_name in self.enabled_scrapers:
                     try:
                         scraper_cls = ScraperFactory.get(scraper_name)
                         storage_path = scraper_cls(folder_name=self.data_folder).get_storage_path()
-                        # Create the folder now so markers can be placed before the scraper runs
                         os.makedirs(storage_path, exist_ok=True)
-                        scraper_path_map[scraper_name] = storage_path
+                        all_storage_paths.append(storage_path)
                         Logger.info(f"[marker-prep] scraper={scraper_name} -> folder={storage_path}")
                     except Exception as e:
                         Logger.warning(f"[marker-prep] Failed to resolve path for scraper {scraper_name}: {e}")
 
-                Logger.info(f"[marker-prep] Got {len(metadata)} processed files from DB to evaluate for markers.")
+                Logger.info(f"[marker-prep] Got {len(metadata)} processed files from DB, will write markers into {len(all_storage_paths)} folder(s).")
                 skipped_prep_count = 0
-                unknown_chains = set()
+                # Write markers into ALL scraper folders — no chain-name matching needed.
+                # The scraper's filter_already_downloaded only checks the disk files in
+                # its own folder, so extra markers from other chains are harmless.
                 for item in metadata:
                     f_name = item["file_name"]   # e.g. "Price123.xml" (post-parse name)
-                    c_name = item["chain_name"]  # e.g. "OSHER_AD"
-
-                    storage_path = scraper_path_map.get(c_name)
-                    if not storage_path:
-                        unknown_chains.add(c_name)
-                        continue
-
-                    # The FTP file may be compressed (.gz) while the DB stores the
-                    # parsed name (.xml).  Create a marker for both variants so the
-                    # scraper's disk-based filter recognises the file regardless of
-                    # which extension the remote server uses.
                     base_name = os.path.splitext(f_name)[0]
-                    for marker_name in (base_name + ".gz", f_name):
-                        marker_path = os.path.join(storage_path, marker_name)
-                        if not os.path.exists(marker_path):
-                            try:
-                                with open(marker_path, 'w') as mf:
-                                    mf.write("marker")
-                                skipped_prep_count += 1
-                            except Exception as e:
-                                Logger.warning(f"[marker-prep] Could not write marker {marker_path}: {e}")
+                    for storage_path in all_storage_paths:
+                        # Create markers for both compressed (.gz) and plain (.xml)
+                        # variants so the disk filter matches regardless of what the
+                        # FTP server uses.
+                        for marker_name in (base_name + ".gz", f_name):
+                            marker_path = os.path.join(storage_path, marker_name)
+                            if not os.path.exists(marker_path):
+                                try:
+                                    with open(marker_path, 'w') as mf:
+                                        mf.write("marker")
+                                    skipped_prep_count += 1
+                                except Exception as e:
+                                    Logger.warning(f"[marker-prep] Could not write marker {marker_path}: {e}")
 
-                if unknown_chains:
-                    Logger.warning(f"[marker-prep] {len(unknown_chains)} chain(s) in DB not matched to an enabled scraper: {unknown_chains}")
                 Logger.info(f"[marker-prep] Created {skipped_prep_count} dummy markers to skip redundant downloads.")
 
             ScarpingTask(

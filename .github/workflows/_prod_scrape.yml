@@ -1,17 +1,121 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+name: Production | Scrape and Push to Supabase
 
-name: Production | Scrape Itreation 
-# if you update 3 hour update the health too
-on: 
+on:
   schedule:
     - cron: '0 */3 * * *'
+
   workflow_dispatch:
+    inputs:
+      enabled_scrapers:
+        description: >
+          Magasins à scraper (séparés par virgule).
+          Laisser vide = tous les magasins actifs par défaut.
+          Valeurs possibles: BAREKET, YAYNO_BITAN_AND_CARREFOUR, COFIX,
+          CITY_MARKET_KIRYATGAT, CITY_MARKET_SHOPS, DOR_ALON, GOOD_PHARM,
+          HAZI_HINAM, HET_COHEN, KESHET, KING_STORE, MAAYAN_2000,
+          MAHSANI_ASHUK, NETIV_HASED, MESHMAT_YOSEF_1, MESHMAT_YOSEF_2,
+          OSHER_AD, POLIZER, RAMI_LEVY, SALACH_DABACH, SHEFA_BARCART_ASHEM,
+          SHUFERSAL, SHUK_AHIR, STOP_MARKET, SUPER_PHARM, SUPER_YUDA,
+          SUPER_SAPIR, FRESH_MARKET_AND_SUPER_DOSH, QUIK, TIV_TAAM,
+          VICTORY, YELLOW, YOHANANOF, ZOL_VEBEGADOL, WOLT
+        required: false
+        default: ''
+      enabled_file_types:
+        description: >
+          Types de fichiers à collecter (séparés par virgule).
+          Laisser vide = tous les types.
+          Valeurs possibles: PRICE_FILE, PRICE_FULL_FILE, PROMO_FILE, PROMO_FULL_FILE, STORE_FILE
+        required: false
+        default: ''
+      limit:
+        description: 'Nombre max de fichiers par magasin (laisser vide = pas de limite)'
+        required: false
+        default: ''
+
+env:
+  # --- Liste des magasins actifs par défaut ---
+  # Pour en désactiver un, commentez la ligne correspondante
+  DEFAULT_SCRAPERS: >-
+    BAREKET,
+    YAYNO_BITAN_AND_CARREFOUR,
+    COFIX,
+    CITY_MARKET_KIRYATGAT,
+    CITY_MARKET_SHOPS,
+    DOR_ALON,
+    GOOD_PHARM,
+    HAZI_HINAM,
+    HET_COHEN,
+    KESHET,
+    KING_STORE,
+    MAAYAN_2000,
+    MAHSANI_ASHUK,
+    NETIV_HASED,
+    MESHMAT_YOSEF_1,
+    MESHMAT_YOSEF_2,
+    OSHER_AD,
+    POLIZER,
+    RAMI_LEVY,
+    SALACH_DABACH,
+    SHEFA_BARCART_ASHEM,
+    SHUFERSAL,
+    SHUK_AHIR,
+    STOP_MARKET,
+    SUPER_PHARM,
+    SUPER_YUDA,
+    SUPER_SAPIR,
+    FRESH_MARKET_AND_SUPER_DOSH,
+    QUIK,
+    TIV_TAAM,
+    VICTORY,
+    YELLOW,
+    YOHANANOF,
+    ZOL_VEBEGADOL,
+    WOLT
 
 jobs:
-  call-workflow:
-    uses: OpenIsraeliSupermarkets/daily-publish-supermarket-data/.github/workflows/template.yml@main
-    with:
-      kaggle_dataset_remote_name: "israeli-supermarkets-2024"
-      operation: "scraping,converting,clean_dump_files,api_update"
-    secrets: inherit
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve active scrapers
+        id: resolve
+        run: |
+          # Si un input manuel est fourni, on l'utilise ; sinon on prend la liste par défaut
+          if [ -n "${{ inputs.enabled_scrapers }}" ]; then
+            SCRAPERS="${{ inputs.enabled_scrapers }}"
+          else
+            # Nettoyer les espaces et sauts de ligne de DEFAULT_SCRAPERS
+            SCRAPERS=$(echo "$DEFAULT_SCRAPERS" | tr -d ' \n')
+          fi
+          echo "scrapers=$SCRAPERS" >> $GITHUB_OUTPUT
+
+          FILE_TYPES="${{ inputs.enabled_file_types }}"
+          echo "file_types=$FILE_TYPES" >> $GITHUB_OUTPUT
+
+          LIMIT="${{ inputs.limit }}"
+          echo "limit=$LIMIT" >> $GITHUB_OUTPUT
+
+      - name: Run scraping
+        env:
+          OUTPUT_DESTINATION: supabase
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          OPERATION: scraping,converting,clean_dump_files,api_update
+          ENABLED_SCRAPERS: ${{ steps.resolve.outputs.scrapers }}
+          ENABLED_FILE_TYPES: ${{ steps.resolve.outputs.file_types }}
+          LIMIT: ${{ steps.resolve.outputs.limit }}
+          APP_DATA_PATH: ./app_data
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+        run: python main.py

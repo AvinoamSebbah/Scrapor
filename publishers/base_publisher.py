@@ -149,7 +149,7 @@ class BaseSupermarketDataPublisher:
                 files_types=self.enabled_file_types,
                 dump_folder_name=self.data_folder,
                 multiprocessing=self.number_of_scraping_processes,
-                lookup_in_db=True,
+                lookup_in_db=False,  # use disk check so our pre-placed markers are respected
                 when_date=self.when_date if self.when_date else now(backfill_hours=1),
                 limit=self.limit,
                 suppress_exception=True,

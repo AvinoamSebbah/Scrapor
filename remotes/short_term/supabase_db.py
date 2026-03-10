@@ -8,12 +8,21 @@ fully in parallel without connection-level contention.
 import os
 import json
 import math
+import time
 from datetime import datetime
+import httpx
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
-_BATCH_SIZE = 500  # safe PostgREST batch size
+# Batch sizes tuned per table — promotions have ~35 fields so smaller chunks
+_BATCH_SIZE_DEFAULT = 500
+_BATCH_SIZE_PROMOS   = 100
+_BATCH_SIZE_PRICES   = 200
+
+# Timeout in seconds for each individual PostgREST request
+_HTTP_TIMEOUT = 120
 
 
 class SupabaseUploader(ShortTermDatabaseUploader):
@@ -67,10 +76,13 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             raise ValueError(
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set"
             )
-        self.client: Client = create_client(url, key)
+        options = ClientOptions(
+            httpclient=httpx.Client(timeout=_HTTP_TIMEOUT)
+        )
+        self.client: Client = create_client(url, key, options=options)
         self.seen_stores: set = set()
         self.seen_products: set = set()
-        Logger.info("Supabase REST client initialised (url=%s)", url)
+        Logger.info("Supabase REST client initialised (url=%s, timeout=%ds)", url, _HTTP_TIMEOUT)
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -83,16 +95,57 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         on_conflict: str,
         ignore_duplicates: bool = False,
     ) -> None:
-        """Upsert *records* into *table* in safe-sized batches via PostgREST."""
+        """Upsert *records* into *table* in safe-sized batches via PostgREST.
+
+        Used for stores, products, processed_files (simple upserts with no JSONB merge).
+        For prices and promotions, use _rpc_batch() instead.
+        """
         if not records:
             return
-        for i in range(0, len(records), _BATCH_SIZE):
-            chunk = records[i : i + _BATCH_SIZE]
-            self.client.table(table).upsert(
-                chunk,
-                on_conflict=on_conflict,
-                ignore_duplicates=ignore_duplicates,
-            ).execute()
+        for i in range(0, len(records), _BATCH_SIZE_DEFAULT):
+            chunk = records[i : i + _BATCH_SIZE_DEFAULT]
+            for attempt in range(3):
+                try:
+                    self.client.table(table).upsert(
+                        chunk,
+                        on_conflict=on_conflict,
+                        ignore_duplicates=ignore_duplicates,
+                    ).execute()
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    wait = 2 ** attempt
+                    Logger.warning(
+                        "Upsert to %s failed (attempt %d/3), retrying in %ds: %s",
+                        table, attempt + 1, wait, e
+                    )
+                    time.sleep(wait)
+
+    def _rpc_batch(self, func_name: str, records: list) -> None:
+        """Call a Supabase RPC function in batches for atomic server-side JSONB merge.
+
+        merge_prices and merge_promotions run INSERT … ON CONFLICT DO UPDATE with
+        store_prices || EXCLUDED.store_prices directly in PostgreSQL — no race condition.
+        """
+        if not records:
+            return
+        batch_size = _BATCH_SIZE_PROMOS if func_name == "merge_promotions" else _BATCH_SIZE_PRICES
+        for i in range(0, len(records), batch_size):
+            chunk = records[i : i + batch_size]
+            for attempt in range(3):
+                try:
+                    self.client.rpc(func_name, {"p_records": chunk}).execute()
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    wait = 2 ** attempt
+                    Logger.warning(
+                        "RPC %s failed (attempt %d/3), retrying in %ds: %s",
+                        func_name, attempt + 1, wait, e
+                    )
+                    time.sleep(wait)
 
     def _fetch_all_pages(self, table: str, columns: str) -> list:
         """Fetch every row from *table*, paginating through PostgREST results."""
@@ -102,11 +155,11 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             result = (
                 self.client.table(table)
                 .select(columns)
-                .range(page * _BATCH_SIZE, (page + 1) * _BATCH_SIZE - 1)
+                .range(page * _BATCH_SIZE_DEFAULT, (page + 1) * _BATCH_SIZE_DEFAULT - 1)
                 .execute()
             )
             all_rows.extend(result.data)
-            if len(result.data) < _BATCH_SIZE:
+            if len(result.data) < _BATCH_SIZE_DEFAULT:
                 break
             page += 1
         return all_rows
@@ -119,6 +172,32 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         except Exception as e:
             Logger.error("Supabase REST connection test failed: %s", str(e))
             raise
+
+    def _fetch_existing_jsonb(
+        self, table: str, pk_col: str, id_col: str, jsonb_col: str, arr_col: str,
+        by_pk: dict
+    ) -> dict:
+        """Fetch existing JSONB and array columns for a set of rows grouped by a primary key.
+
+        Returns a dict keyed by (pk_value, id_value) -> {jsonb_col: {...}, arr_col: [...]}
+        """
+        existing: dict = {}
+        for pk_value, id_values in by_pk.items():
+            for i in range(0, len(id_values), _BATCH_SIZE_DEFAULT):
+                chunk = id_values[i : i + _BATCH_SIZE_DEFAULT]
+                try:
+                    result = (
+                        self.client.table(table)
+                        .select(f"{id_col},{jsonb_col},{arr_col}")
+                        .eq(pk_col, pk_value)
+                        .in_(id_col, chunk)
+                        .execute()
+                    )
+                    for row in result.data:
+                        existing[(pk_value, row[id_col])] = row
+                except Exception as e:
+                    Logger.warning("Failed to fetch existing %s rows: %s", table, e)
+        return existing
 
     # ------------------------------------------------------------------
     # routing
@@ -303,8 +382,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not aggregated:
             return
 
-        Logger.info("Upserting %d prices via Supabase API", len(aggregated))
-        self._upsert_batch("prices", list(aggregated.values()), on_conflict="chain_id,item_code")
+        Logger.info("Merging %d prices via Supabase RPC (atomic JSONB merge)", len(aggregated))
+        self._rpc_batch("merge_prices", list(aggregated.values()))
 
     # ------------------------------------------------------------------
     # products
@@ -447,8 +526,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not aggregated:
             return
 
-        Logger.info("Upserting %d promotions via Supabase API", len(aggregated))
-        self._upsert_batch("promotions", list(aggregated.values()), on_conflict="chain_id,promotion_id")
+        Logger.info("Merging %d promotions via Supabase RPC (atomic JSONB merge)", len(aggregated))
+        self._rpc_batch("merge_promotions", list(aggregated.values()))
 
     # ------------------------------------------------------------------
     # ensure stores exist (FK guard)

@@ -8,6 +8,11 @@ name: "W2 · Scrape"
 #     zero Supabase connections during the actual scraping.
 # When every scrape job finishes, trigger-upload fans-in and fires W3.
 
+# Only one pipeline (W1/W2/W3) can run at a time.
+concurrency:
+  group: supermarket-pipeline
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:

@@ -11,6 +11,11 @@ name: "W3 · Upload to Supabase"
 #     data upserts / RPC calls  → actual upload work
 #   → Never more than 1 store uploading simultaneously.
 
+# Only one pipeline (W1/W2/W3) can run at a time.
+concurrency:
+  group: supermarket-pipeline
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:

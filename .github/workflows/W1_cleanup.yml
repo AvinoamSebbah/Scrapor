@@ -13,6 +13,12 @@ on:
         required: false
         default: 'true'
         type: choice
+
+# Only one pipeline (W1/W2/W3) can run at a time.
+# A second trigger waits in queue instead of launching a duplicate.
+concurrency:
+  group: supermarket-pipeline
+  cancel-in-progress: false
         options: ['true', 'false']
 
 jobs:

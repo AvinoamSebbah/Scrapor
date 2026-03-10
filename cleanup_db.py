@@ -54,9 +54,9 @@ class DatabaseCleaner:
             import psycopg2
             self._conn = psycopg2.connect(db_url, connect_timeout=15)
             self._conn.autocommit = True
-            # Guard every statement with a 30s timeout to avoid indefinite hangs
+            # 5-minute per-statement guard (cleanup DELETEs on large tables can be slow)
             with self._conn.cursor() as cur:
-                cur.execute("SET statement_timeout = '30s'")
+                cur.execute("SET statement_timeout = '300s'")
             self._mode = "psycopg2"
             print("[i] Connection mode: psycopg2 direct SQL")
         else:

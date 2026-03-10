@@ -16,9 +16,11 @@ from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
 # Batch sizes tuned per table — promotions have ~35 fields so smaller chunks
-_BATCH_SIZE_DEFAULT = 500
+_BATCH_SIZE_DEFAULT  = 500
 _BATCH_SIZE_PROMOS   = 100
 _BATCH_SIZE_PRICES   = 200
+# Products are a hot table under concurrent load — smaller batches reduce lock hold time
+_BATCH_SIZE_PRODUCTS = 100
 
 # Timeout in seconds for each individual PostgREST request
 _HTTP_TIMEOUT = 120
@@ -95,6 +97,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         records: list,
         on_conflict: str,
         ignore_duplicates: bool = False,
+        batch_size: int = _BATCH_SIZE_DEFAULT,
     ) -> None:
         """Upsert *records* into *table* in safe-sized batches via PostgREST.
 
@@ -103,9 +106,13 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         """
         if not records:
             return
-        for i in range(0, len(records), _BATCH_SIZE_DEFAULT):
-            chunk = records[i : i + _BATCH_SIZE_DEFAULT]
-            for attempt in range(3):
+        for i in range(0, len(records), batch_size):
+            chunk = records[i : i + batch_size]
+            # 5 attempts with increasing waits — statement timeout (57014) is caused by
+            # concurrent lock contention; we need longer pauses to let competing
+            # transactions finish before retrying.
+            _waits = [5, 10, 20, 40]
+            for attempt in range(5):
                 try:
                     self.client.table(table).upsert(
                         chunk,
@@ -114,11 +121,11 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     ).execute()
                     break
                 except Exception as e:
-                    if attempt == 2:
+                    if attempt == 4:
                         raise
-                    wait = 2 ** attempt
+                    wait = _waits[attempt]
                     Logger.warning(
-                        "Upsert to %s failed (attempt %d/3), retrying in %ds: %s",
+                        "Upsert to %s failed (attempt %d/5), retrying in %ds: %s",
                         table, attempt + 1, wait, e
                     )
                     time.sleep(wait)
@@ -425,7 +432,10 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             return
 
         Logger.info("Upserting %d products via Supabase API", len(records))
-        self._upsert_batch("products", list(records.values()), on_conflict="item_code")
+        self._upsert_batch(
+            "products", list(records.values()), on_conflict="item_code",
+            batch_size=_BATCH_SIZE_PRODUCTS,
+        )
         self.seen_products.update(records.keys())
 
     # ------------------------------------------------------------------

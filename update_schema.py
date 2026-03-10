@@ -228,7 +228,55 @@ def update_schema():
         $$;
         """)
 
-        print("Schema updated: tables recreated + merge_prices / merge_promotions RPC functions created.")
+        # -------------------------------------------------------------------
+        # RPC functions for safe periodic cleanup (called by cleanup_db.py)
+        # None of these tables have FK references pointing TO them, so there
+        # is no cascade risk from these deletes.
+        # -------------------------------------------------------------------
+        cur.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_expired_promotions()
+        RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+        DECLARE
+          deleted_count INTEGER;
+        BEGIN
+          DELETE FROM promotions
+          WHERE promotion_end_date IS NOT NULL
+            AND promotion_end_date < CURRENT_DATE;
+          GET DIAGNOSTICS deleted_count = ROW_COUNT;
+          RETURN deleted_count;
+        END;
+        $$;
+        """)
+
+        cur.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_stale_prices(p_cutoff TIMESTAMP WITH TIME ZONE)
+        RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+        DECLARE
+          deleted_count INTEGER;
+        BEGIN
+          DELETE FROM prices
+          WHERE updated_at < p_cutoff;
+          GET DIAGNOSTICS deleted_count = ROW_COUNT;
+          RETURN deleted_count;
+        END;
+        $$;
+        """)
+
+        cur.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_old_processed_files(p_cutoff TIMESTAMP WITH TIME ZONE)
+        RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+        DECLARE
+          deleted_count INTEGER;
+        BEGIN
+          DELETE FROM processed_files
+          WHERE processed_at < p_cutoff;
+          GET DIAGNOSTICS deleted_count = ROW_COUNT;
+          RETURN deleted_count;
+        END;
+        $$;
+        """)
+
+        print("Schema updated: tables recreated + merge_prices / merge_promotions + 3 cleanup RPC functions created.")
 
 if __name__ == '__main__':
     update_schema()

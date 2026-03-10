@@ -85,6 +85,9 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             pass
         self.seen_stores: set = set()
         self.seen_products: set = set()
+        # Maps (chain_id, store_id) -> stores.id (DB primary key)
+        # Used so store_prices JSONB keys are globally unique across chains.
+        self._store_db_id_cache: dict = {}
         Logger.info("Supabase REST client initialised (url=%s, timeout=%ds)", url, _HTTP_TIMEOUT)
 
     # ------------------------------------------------------------------
@@ -212,6 +215,48 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         return existing
 
     # ------------------------------------------------------------------
+    # store DB-PK resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_store_db_ids(self, pairs: set) -> dict:
+        """Return {(chain_id, store_id): stores.id} for all given pairs.
+
+        Checks the in-memory cache first; fetches missing pairs from Supabase.
+        Falls back to using raw store_id as key if the lookup fails.
+        """
+        result = {}
+        missing_by_chain: dict = {}
+        for chain_id, store_id in pairs:
+            cached = self._store_db_id_cache.get((chain_id, store_id))
+            if cached is not None:
+                result[(chain_id, store_id)] = cached
+            else:
+                missing_by_chain.setdefault(chain_id, []).append(store_id)
+
+        for chain_id, store_ids in missing_by_chain.items():
+            for i in range(0, len(store_ids), 500):
+                chunk = store_ids[i : i + 500]
+                try:
+                    rows = (
+                        self.client.table("stores")
+                        .select("id,store_id")
+                        .eq("chain_id", chain_id)
+                        .in_("store_id", chunk)
+                        .execute()
+                    ).data
+                    for row in rows:
+                        key = (chain_id, str(row["store_id"]))
+                        self._store_db_id_cache[key] = row["id"]
+                        result[key] = row["id"]
+                except Exception as e:
+                    Logger.warning("Failed to resolve store DB ids for chain %s: %s", chain_id, e)
+                    # Fallback: use raw store_id so data is not lost
+                    for sid in chunk:
+                        result[(chain_id, sid)] = sid
+
+        return result
+
+    # ------------------------------------------------------------------
     # routing
     # ------------------------------------------------------------------
 
@@ -334,12 +379,21 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     def _upsert_prices(self, items):
         """Map and upsert products and prices via REST API.
 
-        store_prices is built by local aggregation so the full JSONB is sent in
-        a single upsert — no server-side JSONB merge needed.
+        store_prices JSONB keys are stores.id (DB primary key), not raw chain
+        store_id — so keys are globally unique across all chains.
         """
-        # Ensure stores and products exist for foreign keys
         self._ensure_stores_exist(items)
         self._upsert_products(items)
+
+        # Resolve DB primary keys for every (chain_id, store_id) pair touched
+        pairs = set()
+        for item in items:
+            content = item.get("content", {})
+            chain_id = self._clean_id(self._get_val(content, "ChainId"))
+            store_id = self._clean_id(self._get_val(content, "StoreId"))
+            if chain_id and store_id:
+                pairs.add((chain_id, store_id))
+        db_id_map = self._resolve_store_db_ids(pairs)
 
         now = datetime.now().isoformat()
         today = datetime.now().strftime("%Y-%m-%d")
@@ -354,6 +408,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             if not chain_id or not store_id or not item_code:
                 continue
 
+            # Use DB PK as the key so it's globally unique across chains
+            db_store_key = str(db_id_map.get((chain_id, store_id), store_id))
             key = (chain_id, item_code)
             item_price = self._get_val(content, "ItemPrice")
 
@@ -362,8 +418,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "chain_id": chain_id,
                     "item_code": item_code,
                     "base_price": item_price,
-                    "store_prices": {store_id: item_price},
-                    "available_in_store_ids": [store_id],
+                    "store_prices": {db_store_key: item_price},
+                    "available_in_store_ids": [db_store_key],
                     "item_type": self._get_val(content, "ItemType"),
                     "unit_qty": self._get_val(content, "UnitQty"),
                     "quantity": self._get_val(content, "Quantity"),
@@ -387,9 +443,9 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "updated_at": now,
                 }
             else:
-                aggregated[key]["store_prices"][store_id] = item_price
-                if store_id not in aggregated[key]["available_in_store_ids"]:
-                    aggregated[key]["available_in_store_ids"].append(store_id)
+                aggregated[key]["store_prices"][db_store_key] = item_price
+                if db_store_key not in aggregated[key]["available_in_store_ids"]:
+                    aggregated[key]["available_in_store_ids"].append(db_store_key)
 
         if not aggregated:
             return
@@ -447,8 +503,23 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _upsert_promos(self, items):
-        """Map and upsert promotions via REST API."""
+        """Map and upsert promotions via REST API.
+
+        store_promotions JSONB keys are stores.id (DB primary key), not raw
+        chain store_id — so keys are globally unique across all chains.
+        """
         self._ensure_stores_exist(items)
+
+        # Resolve DB primary keys for every (chain_id, store_id) pair touched
+        pairs = set()
+        for item in items:
+            content = item.get("content", {})
+            chain_id = self._clean_id(self._get_val(content, "ChainId"))
+            store_id = self._clean_id(self._get_val(content, "StoreId"))
+            if chain_id and store_id:
+                pairs.add((chain_id, store_id))
+        db_id_map = self._resolve_store_db_ids(pairs)
+
         now = datetime.now()
         now_iso = now.isoformat()
         aggregated: dict = {}
@@ -462,6 +533,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             if not chain_id or not store_id or not promotion_id:
                 continue
 
+            # Use DB PK as the key so it's globally unique across chains
+            db_store_key = str(db_id_map.get((chain_id, store_id), store_id))
             key = (chain_id, promotion_id)
             store_promo_val = (
                 self._get_val(content, "MinNoOfItemOffered")
@@ -528,15 +601,15 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "weight_unit": self._get_val(content, "WeightUnit"),
                     "club_id": self._get_val(content, "ClubId"),
                     "items": promotion_items,
-                    "store_promotions": {store_id: store_promo_val},
-                    "available_in_store_ids": [store_id],
+                    "store_promotions": {db_store_key: store_promo_val},
+                    "available_in_store_ids": [db_store_key],
                     "created_at": now_iso,
                     "updated_at": now_iso,
                 }
             else:
-                aggregated[key]["store_promotions"][store_id] = store_promo_val
-                if store_id not in aggregated[key]["available_in_store_ids"]:
-                    aggregated[key]["available_in_store_ids"].append(store_id)
+                aggregated[key]["store_promotions"][db_store_key] = store_promo_val
+                if db_store_key not in aggregated[key]["available_in_store_ids"]:
+                    aggregated[key]["available_in_store_ids"].append(db_store_key)
 
         if not aggregated:
             return
@@ -568,6 +641,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             Logger.info("Ensuring %d referenced stores exist via Supabase API", len(records))
             self._upsert_batch("stores", records, on_conflict="chain_id,store_id", ignore_duplicates=True)
             self.seen_stores.update(seen)
+            # Eagerly populate the db-id cache for these stores
+            self._resolve_store_db_ids(seen)
 
     # ------------------------------------------------------------------
     # lifecycle

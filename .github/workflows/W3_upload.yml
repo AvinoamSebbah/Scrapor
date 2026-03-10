@@ -120,6 +120,7 @@ jobs:
 
       - name: Download scrape artifact
         # continue-on-error: this store may have had no new files to scrape
+        id: download_scrape
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -128,13 +129,25 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./app_data/
 
+      - name: Check if store was scraped
+        id: check_scraped
+        run: |
+          if [ "${{ steps.download_scrape.outcome }}" = "success" ] && [ -n "$(find ./app_data -type f 2>/dev/null | head -1)" ]; then
+            echo "has_data=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_data=false" >> $GITHUB_OUTPUT
+            echo "⏭️  No artifact for ${{ matrix.store }} — skipping upload"
+          fi
+
       - name: Download processed-files cache (from this run)
+        if: steps.check_scraped.outputs.has_data == 'true'
         uses: actions/download-artifact@v4
         with:
           name: processed-files-cache
           path: ./
 
       - name: Restore folder structure
+        if: steps.check_scraped.outputs.has_data == 'true'
         run: |
           mkdir -p ./app_data/dumps/status
           if [ -d ./app_data/status ]; then
@@ -142,6 +155,7 @@ jobs:
           fi
 
       - name: Upload to Supabase
+        if: steps.check_scraped.outputs.has_data == 'true'
         env:
           OUTPUT_DESTINATION: supabase
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

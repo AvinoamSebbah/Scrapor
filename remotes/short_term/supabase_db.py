@@ -12,7 +12,6 @@ import time
 from datetime import datetime
 import httpx
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
 from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
@@ -76,10 +75,12 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             raise ValueError(
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set"
             )
-        options = ClientOptions(
-            http_client=httpx.Client(timeout=_HTTP_TIMEOUT)
-        )
-        self.client: Client = create_client(url, key, options=options)
+        self.client: Client = create_client(url, key)
+        # Patch the timeout on the underlying httpx session used by postgrest
+        try:
+            self.client.postgrest.session.timeout = _HTTP_TIMEOUT
+        except Exception:
+            pass
         self.seen_stores: set = set()
         self.seen_products: set = set()
         Logger.info("Supabase REST client initialised (url=%s, timeout=%ds)", url, _HTTP_TIMEOUT)

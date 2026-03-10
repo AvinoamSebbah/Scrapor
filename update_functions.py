@@ -1,94 +1,30 @@
+"""Push only the RPC function definitions to Supabase.
+
+Safe to run at any time — uses CREATE OR REPLACE, never drops data tables.
+Requires SUPABASE_DATABASE_URL in the environment.
+"""
 import os
 import psycopg2
 
 db_url = os.getenv('SUPABASE_DATABASE_URL')
 
-def update_schema():
+def update_functions():
     conn = psycopg2.connect(db_url)
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute("DROP TABLE IF EXISTS prices CASCADE;")
-        cur.execute("DROP TABLE IF EXISTS promotions CASCADE;")
-        
-        cur.execute("""
-        CREATE TABLE prices (
-            id SERIAL PRIMARY KEY,
-            chain_id VARCHAR NOT NULL,
-            item_code VARCHAR NOT NULL,
-            base_price VARCHAR,
-            store_prices JSONB DEFAULT '{}'::jsonb,
-            available_in_store_ids TEXT[] DEFAULT '{}',
-            item_type VARCHAR,
-            unit_qty VARCHAR,
-            quantity VARCHAR,
-            unit_of_measure VARCHAR,
-            b_is_weighted BOOLEAN DEFAULT false,
-            qty_in_package VARCHAR,
-            price_update_date TIMESTAMP,
-            allow_discount VARCHAR,
-            item_status VARCHAR,
-            item_id VARCHAR,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(chain_id, item_code)
-        );
-        """)
-        
-        cur.execute("""
-        CREATE INDEX idx_prices_chain_id ON prices(chain_id);
-        CREATE INDEX idx_prices_item_code ON prices(item_code);
-        """)
-        
-        cur.execute("""
-        CREATE TABLE promotions (
-            id SERIAL PRIMARY KEY,
-            chain_id VARCHAR NOT NULL,
-            promotion_id VARCHAR NOT NULL,
-            sub_chain_id VARCHAR,
-            bikoret_no VARCHAR,
-            promotion_description VARCHAR,
-            promotion_update_date TIMESTAMP,
-            promotion_start_date DATE,
-            promotion_start_hour VARCHAR,
-            promotion_end_date DATE,
-            promotion_end_hour VARCHAR,
-            promotion_days VARCHAR,
-            redemption_limit VARCHAR,
-            reward_type VARCHAR,
-            allow_multiple_discounts VARCHAR,
-            is_weighted_promo BOOLEAN DEFAULT false,
-            is_gift_item VARCHAR,
-            min_no_of_item_offered VARCHAR,
-            additional_is_coupon VARCHAR,
-            additional_gift_count VARCHAR,
-            additional_is_total VARCHAR,
-            additional_is_active VARCHAR,
-            additional_restrictions VARCHAR,
-            remarks VARCHAR,
-            min_qty VARCHAR,
-            discounted_price VARCHAR,
-            discounted_price_per_mida VARCHAR,
-            weight_unit VARCHAR,
-            club_id VARCHAR,
-            items JSONB,
-            store_promotions JSONB DEFAULT '{}'::jsonb,
-            available_in_store_ids TEXT[] DEFAULT '{}',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(chain_id, promotion_id)
-        );
-        """)
-        
-        cur.execute("""
-        CREATE INDEX idx_promotions_chain_id ON promotions(chain_id);
-        CREATE INDEX idx_promotions_promotion_id ON promotions(promotion_id);
-        """)
-        
-        cur.execute("TRUNCATE TABLE stores, products, processed_files CASCADE;")
 
-        # -------------------------------------------------------------------
-        # RPC functions for atomic JSONB merge (called via supabase-py REST)
-        # -------------------------------------------------------------------
+        cur.execute("""
+        CREATE OR REPLACE FUNCTION get_table_stats()
+        RETURNS TABLE(table_name TEXT, approx_count BIGINT)
+        LANGUAGE sql SECURITY DEFINER AS $$
+          SELECT relname::TEXT, n_live_tup::BIGINT
+          FROM pg_stat_user_tables
+          WHERE relname IN ('stores','products','prices','promotions','processed_files')
+          ORDER BY relname;
+        $$;
+        """)
+        print("✅ get_table_stats")
+
         cur.execute("""
         CREATE OR REPLACE FUNCTION merge_prices(p_records JSONB)
         RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
@@ -138,6 +74,7 @@ def update_schema():
         END;
         $$;
         """)
+        print("✅ merge_prices")
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION merge_promotions(p_records JSONB)
@@ -155,10 +92,7 @@ def update_schema():
             created_at, updated_at
           )
           SELECT
-            r->>'chain_id',
-            r->>'promotion_id',
-            r->>'sub_chain_id',
-            r->>'bikoret_no',
+            r->>'chain_id', r->>'promotion_id', r->>'sub_chain_id', r->>'bikoret_no',
             r->>'promotion_description',
             CASE WHEN (r->>'promotion_update_date') IS NOT NULL AND (r->>'promotion_update_date') != ''
                  THEN (r->>'promotion_update_date')::TIMESTAMP ELSE NULL END,
@@ -167,24 +101,13 @@ def update_schema():
             r->>'promotion_start_hour',
             CASE WHEN (r->>'promotion_end_date') IS NOT NULL AND (r->>'promotion_end_date') != ''
                  THEN (r->>'promotion_end_date')::DATE ELSE NULL END,
-            r->>'promotion_end_hour',
-            r->>'promotion_days',
-            r->>'redemption_limit',
-            r->>'reward_type',
-            r->>'allow_multiple_discounts',
+            r->>'promotion_end_hour', r->>'promotion_days', r->>'redemption_limit',
+            r->>'reward_type', r->>'allow_multiple_discounts',
             COALESCE((r->>'is_weighted_promo')::boolean, false),
-            r->>'is_gift_item',
-            r->>'min_no_of_item_offered',
-            r->>'additional_is_coupon',
-            r->>'additional_gift_count',
-            r->>'additional_is_total',
-            r->>'additional_is_active',
-            r->>'additional_restrictions',
-            r->>'remarks',
-            r->>'min_qty',
-            r->>'discounted_price',
-            r->>'discounted_price_per_mida',
-            r->>'weight_unit',
+            r->>'is_gift_item', r->>'min_no_of_item_offered', r->>'additional_is_coupon',
+            r->>'additional_gift_count', r->>'additional_is_total', r->>'additional_is_active',
+            r->>'additional_restrictions', r->>'remarks', r->>'min_qty',
+            r->>'discounted_price', r->>'discounted_price_per_mida', r->>'weight_unit',
             r->>'club_id',
             COALESCE(r->'items', '[]'::jsonb),
             COALESCE(r->'store_promotions', '{}'::jsonb),
@@ -227,23 +150,7 @@ def update_schema():
         END;
         $$;
         """)
-
-        # -------------------------------------------------------------------
-        # RPC functions for safe periodic cleanup (called by cleanup_db.py)
-        # None of these tables have FK references pointing TO them, so there
-        # is no cascade risk from these deletes.
-        # p_dry_run=TRUE only counts — no rows are deleted.
-        # -------------------------------------------------------------------
-        cur.execute("""
-        CREATE OR REPLACE FUNCTION get_table_stats()
-        RETURNS TABLE(table_name TEXT, approx_count BIGINT)
-        LANGUAGE sql SECURITY DEFINER AS $$
-          SELECT relname::TEXT, n_live_tup::BIGINT
-          FROM pg_stat_user_tables
-          WHERE relname IN ('stores','products','prices','promotions','processed_files')
-          ORDER BY relname;
-        $$;
-        """)
+        print("✅ merge_promotions")
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION cleanup_expired_promotions(p_dry_run BOOLEAN DEFAULT FALSE)
@@ -266,6 +173,7 @@ def update_schema():
         END;
         $$;
         """)
+        print("✅ cleanup_expired_promotions")
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION cleanup_stale_prices(
@@ -286,6 +194,7 @@ def update_schema():
         END;
         $$;
         """)
+        print("✅ cleanup_stale_prices")
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION cleanup_old_processed_files(
@@ -306,8 +215,10 @@ def update_schema():
         END;
         $$;
         """)
+        print("✅ cleanup_old_processed_files")
 
-        print("Schema updated: tables recreated + merge_prices / merge_promotions + 3 cleanup RPC functions created.")
+    conn.close()
+    print("\nAll functions updated successfully.")
 
 if __name__ == '__main__':
-    update_schema()
+    update_functions()

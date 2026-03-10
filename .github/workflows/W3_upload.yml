@@ -1,0 +1,151 @@
+name: "W3 · Upload to Supabase"
+
+# Triggered by W2_scrape.yml after all scrape jobs finish.
+#
+# CONNECTION GUARANTEE: at most ONE Supabase connection is active at any time.
+#   Job 1 – fetch-processed-files: one REST connection → saves processed_files_cache.json
+#   Jobs 2-36 – upload (max-parallel: 1, SEQUENTIAL): each store uploads in turn.
+#     sync_cache()              → reads local JSON file  (no DB hit)
+#     get_processed_files_names → reads local JSON file  (no DB hit)
+#     _test_connection()        → 1 fast LIMIT 1 query
+#     data upserts / RPC calls  → actual upload work
+#   → Never more than 1 store uploading simultaneously.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scrape_run_id:
+        description: 'Run ID of W2_scrape.yml that produced the artifacts'
+        required: true
+        type: string
+
+jobs:
+  # --------------------------------------------------------------------------
+  # ONE connection to fetch processed_files — closes immediately after.
+  # --------------------------------------------------------------------------
+  fetch-processed-files:
+    name: "Fetch processed files (1 DB connection)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch processed_files from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python fetch_processed_files.py
+
+      - name: Upload cache artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-files-cache
+          path: processed_files_cache.json
+          retention-days: 1
+
+  # --------------------------------------------------------------------------
+  # SEQUENTIAL uploads — max-parallel: 1 guarantees one DB connection at a time.
+  # Each job reads the pre-fetched cache instead of querying the DB for it.
+  # --------------------------------------------------------------------------
+  upload:
+    name: "Upload ${{ matrix.store }} → Supabase"
+    needs: fetch-processed-files
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read    # needed to download artifacts from scrape_run_id
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1    # ← SEQUENTIAL: only one store uploads at a time
+      matrix:
+        store:
+          - BAREKET
+          - YAYNO_BITAN_AND_CARREFOUR
+          - COFIX
+          - CITY_MARKET_KIRYATGAT
+          - CITY_MARKET_SHOPS
+          - DOR_ALON
+          - GOOD_PHARM
+          - HAZI_HINAM
+          - HET_COHEN
+          - KESHET
+          - KING_STORE
+          - MAAYAN_2000
+          - MAHSANI_ASHUK
+          - NETIV_HASED
+          - MESHMAT_YOSEF_1
+          - MESHMAT_YOSEF_2
+          - OSHER_AD
+          - POLIZER
+          - RAMI_LEVY
+          - SALACH_DABACH
+          - SHEFA_BARCART_ASHEM
+          - SHUFERSAL
+          - SHUK_AHIR
+          - STOP_MARKET
+          - SUPER_PHARM
+          - SUPER_YUDA
+          - SUPER_SAPIR
+          - FRESH_MARKET_AND_SUPER_DOSH
+          - QUIK
+          - TIV_TAAM
+          - VICTORY
+          - YELLOW
+          - YOHANANOF
+          - ZOL_VEBEGADOL
+          - WOLT
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Download scrape artifact
+        # continue-on-error: this store may have had no new files to scrape
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: outputs-${{ matrix.store }}
+          run-id: ${{ inputs.scrape_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./app_data/
+
+      - name: Download processed-files cache (from this run)
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-files-cache
+          path: ./
+
+      - name: Restore folder structure
+        run: |
+          mkdir -p ./app_data/dumps/status
+          if [ -d ./app_data/status ]; then
+            mv ./app_data/status/* ./app_data/dumps/status/ 2>/dev/null || true
+          fi
+
+      - name: Upload to Supabase
+        env:
+          OUTPUT_DESTINATION: supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPERATION: api_update
+          ENABLED_SCRAPERS: ${{ matrix.store }}
+          APP_DATA_PATH: ./app_data
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+          # Pre-fetched file → sync_cache() and get_processed_files_names()
+          # read from this file instead of querying Supabase again.
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json
+        run: python main.py

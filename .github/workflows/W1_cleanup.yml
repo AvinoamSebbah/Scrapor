@@ -1,0 +1,53 @@
+name: "W1 · Cleanup"
+
+# Runs every 3h and kicks off the full pipeline: W1 → W2 → W3.
+# Manual dispatch lets you run cleanup alone or trigger a full cycle.
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'   # 00:00, 03:00, 06:00 … UTC
+  workflow_dispatch:
+    inputs:
+      trigger_scrape:
+        description: 'Trigger W2 scrape after cleanup?'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  cleanup:
+    name: "DB Cleanup"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Run cleanup
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python cleanup_db.py --execute
+
+  trigger-scrape:
+    name: "Trigger W2 – Scrape"
+    needs: cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Start W2_scrape
+        # Skip if manually requested not to trigger
+        if: github.event_name == 'schedule' || inputs.trigger_scrape == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run W2_scrape.yml --ref ${{ github.ref_name }}

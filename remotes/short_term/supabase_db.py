@@ -173,9 +173,13 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         return all_rows
 
     def _test_connection(self) -> None:
-        """Verify that the REST client can reach the project."""
+        """Verify that the REST client can reach the project.
+
+        Uses LIMIT 1 with no count — avoids a full table scan that would
+        trigger a statement timeout on large tables.
+        """
         try:
-            self.client.table("processed_files").select("file_name", count="exact").limit(0).execute()
+            self.client.table("processed_files").select("file_name").limit(1).execute()
             Logger.info("Supabase REST connection test successful")
         except Exception as e:
             Logger.error("Supabase REST connection test failed: %s", str(e))
@@ -581,7 +585,28 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def sync_cache(self, local_cache):
-        """Sync remote database state to the local cache."""
+        """Sync remote database state to the local cache.
+
+        If PROCESSED_FILES_CACHE env var points to a pre-fetched JSON produced
+        by fetch_processed_files.py, load from that file instead of hitting
+        Supabase again.  Falls back to the REST API if the file is absent.
+        """
+        cache_file = os.getenv("PROCESSED_FILES_CACHE")
+        if cache_file and os.path.exists(cache_file):
+            Logger.info("Loading processed_files from pre-fetched cache: %s", cache_file)
+            try:
+                with open(cache_file, encoding="utf-8") as f:
+                    rows = json.load(f)
+                for row in rows:
+                    if row.get("record_count", 0) > 0:
+                        local_cache.update_last_processed_row(row["file_name"], row["record_count"] - 1)
+                self.seen_stores = set()
+                self.seen_products = set()
+                Logger.info("Local cache loaded from file with %d files.", len(rows))
+                return
+            except Exception as e:
+                Logger.warning("Failed to load cache file, falling back to Supabase: %s", e)
+
         Logger.info("Syncing local cache from Supabase 'processed_files' table...")
         try:
             rows = self._fetch_all_pages("processed_files", "file_name,record_count")
@@ -595,7 +620,15 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             Logger.warning("Failed to sync cache from Supabase: %s", str(e))
 
     def get_processed_files_names(self):
-        """Get the set of processed filenames from the database."""
+        """Get the set of processed filenames — from cache file if available."""
+        cache_file = os.getenv("PROCESSED_FILES_CACHE")
+        if cache_file and os.path.exists(cache_file):
+            try:
+                with open(cache_file, encoding="utf-8") as f:
+                    rows = json.load(f)
+                return {row["file_name"] for row in rows}
+            except Exception as e:
+                Logger.warning("Failed to read processed_files cache file: %s", e)
         try:
             rows = self._fetch_all_pages("processed_files", "file_name")
             return {row["file_name"] for row in rows}
@@ -604,7 +637,15 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             return set()
 
     def get_processed_files_metadata(self):
-        """Get metadata (file_name, chain_name) for all processed files."""
+        """Get metadata (file_name, chain_name) — from cache file if available."""
+        cache_file = os.getenv("PROCESSED_FILES_CACHE")
+        if cache_file and os.path.exists(cache_file):
+            try:
+                with open(cache_file, encoding="utf-8") as f:
+                    rows = json.load(f)
+                return [{"file_name": row["file_name"], "chain_name": row.get("chain_name")} for row in rows]
+            except Exception as e:
+                Logger.warning("Failed to read processed_files cache file: %s", e)
         try:
             rows = self._fetch_all_pages("processed_files", "file_name,chain_name")
             return [{"file_name": row["file_name"], "chain_name": row.get("chain_name")} for row in rows]

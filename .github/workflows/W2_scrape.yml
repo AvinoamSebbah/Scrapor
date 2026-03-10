@@ -176,5 +176,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run W3_upload.yml \
+            --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }} \
             -f scrape_run_id=${{ github.run_id }}

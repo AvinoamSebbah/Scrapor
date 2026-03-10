@@ -21,6 +21,7 @@ Environment variables:
 
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 _HTTP_TIMEOUT = 120
@@ -71,12 +72,20 @@ class DatabaseCleaner:
     def _rpc_or_sql(self, rpc_name: str, params: dict, sql_count: str, sql_delete: str) -> int:
         """Run a cleanup operation via RPC (REST mode) or direct SQL (psycopg2 mode)."""
         if self._mode == "rest":
-            try:
-                result = self.client.rpc(rpc_name, params).execute()
-                return result.data if isinstance(result.data, int) else 0
-            except Exception as e:
-                print(f"  [!] RPC error: {e}")
-                return 0
+            for attempt in range(1, 5):  # 4 attempts, backs off on PGRST002
+                try:
+                    result = self.client.rpc(rpc_name, params).execute()
+                    return result.data if isinstance(result.data, int) else 0
+                except Exception as e:
+                    err = str(e)
+                    if "PGRST002" in err and attempt < 4:
+                        wait = attempt * 15
+                        print(f"  [!] Schema cache not ready (PGRST002), retrying in {wait}s… (attempt {attempt}/4)")
+                        time.sleep(wait)
+                    else:
+                        print(f"  [!] RPC error: {e}")
+                        return 0
+            return 0
         else:
             try:
                 with self._conn.cursor() as cur:
@@ -92,12 +101,18 @@ class DatabaseCleaner:
 
     def _stats_summary(self) -> dict:
         if self._mode == "rest":
-            try:
-                result = self.client.rpc("get_table_stats").execute()
-                return {row["table_name"]: row["approx_count"] for row in (result.data or [])}
-            except Exception as e:
-                print(f"  (summary error: {e})")
-                return {}
+            for attempt in range(1, 4):
+                try:
+                    result = self.client.rpc("get_table_stats").execute()
+                    return {row["table_name"]: row["approx_count"] for row in (result.data or [])}
+                except Exception as e:
+                    err = str(e)
+                    if "PGRST002" in err and attempt < 3:
+                        time.sleep(attempt * 15)
+                    else:
+                        print(f"  (summary error: {e})")
+                        return {}
+            return {}
         else:
             try:
                 with self._conn.cursor() as cur:

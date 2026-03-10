@@ -77,7 +77,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set"
             )
         options = ClientOptions(
-            httpclient=httpx.Client(timeout=_HTTP_TIMEOUT)
+            http_client=httpx.Client(timeout=_HTTP_TIMEOUT)
         )
         self.client: Client = create_client(url, key, options=options)
         self.seen_stores: set = set()

@@ -142,6 +142,7 @@ jobs:
           ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}
           LIMIT: ${{ inputs.limit }}
           APP_DATA_PATH: ./app_data
+          PYTHONUNBUFFERED: '1'
           LOG_LEVEL: WARNING
           TZ: Asia/Jerusalem
         run: python main.py

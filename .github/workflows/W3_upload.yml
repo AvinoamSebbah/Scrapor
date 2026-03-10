@@ -39,6 +39,7 @@ jobs:
 
       - name: Fetch processed_files from Supabase
         env:
+          PYTHONUNBUFFERED: '1'
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python fetch_processed_files.py

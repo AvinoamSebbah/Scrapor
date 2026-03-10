@@ -12,10 +12,9 @@ on:
         required: true
         type: string
 
-# Garantit qu'un seul upload tourne à la fois, toutes origines confondues.
-# Les autres attendent leur tour dans la queue (ne sont pas annulés).
+# Chaque magasin a son propre groupe de concurrence → tous les uploads tournent en parallèle.
 concurrency:
-  group: supabase-upload
+  group: supabase-upload-${{ inputs.store }}
   cancel-in-progress: false
 
 jobs:
@@ -59,7 +58,8 @@ jobs:
       - name: Upload to Supabase
         env:
           OUTPUT_DESTINATION: supabase
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ inputs.store }}   # scope l'upload à ce seul magasin
           APP_DATA_PATH: ./app_data

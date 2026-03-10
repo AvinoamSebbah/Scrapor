@@ -106,7 +106,8 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           OUTPUT_DESTINATION: supabase
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPERATION: scraping,converting,clean_dump_files
           ENABLED_SCRAPERS: ${{ matrix.store }}
           ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}

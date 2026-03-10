@@ -1,22 +1,23 @@
-"""Supabase (PostgreSQL) implementation of the database uploader.
+"""Supabase REST API implementation of the database uploader.
 
-This module provides functionality for uploading data directly to a Supabase 
-PostgreSQL database, mapping the supermarket data to a specific schema.
+Uses the official supabase-py client to communicate via PostgREST — no direct
+PostgreSQL connection required.  Each upload job for a different store runs
+fully in parallel without connection-level contention.
 """
 
 import os
 import json
-import logging
 import math
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import execute_values, Json
+from supabase import create_client, Client
 from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
+_BATCH_SIZE = 500  # safe PostgREST batch size
+
+
 class SupabaseUploader(ShortTermDatabaseUploader):
-    """Supabase implementation for storing and managing supermarket data.
-    """
+    """Supabase REST API implementation for storing and managing supermarket data."""
 
     @staticmethod
     def _get_val(d, key, default=None):
@@ -30,7 +31,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                 if k.lower() == key_lower:
                     val = v
                     break
-        
+
         # Handle NaN (often comes from pandas reading empty CSV fields)
         if val is not None:
             try:
@@ -38,10 +39,10 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     return default
                 if str(val).lower() == "nan":
                     return default
-            except:
+            except Exception:
                 pass
             return val
-            
+
         return default
 
     @staticmethod
@@ -54,39 +55,77 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             return s_val[:-2]
         return s_val
 
-    def __init__(self, database_url=None):
-        """Initialize PostgreSQL connection.
+    def __init__(self, url=None, key=None):
+        """Initialise the Supabase REST client.
 
-        Args:
-            database_url (str, optional): PostgreSQL connection URI.
+        Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) from
+        the environment when not supplied explicitly.
         """
-        self.uri = database_url or os.getenv("SUPABASE_DATABASE_URL")
-        self.conn = None
-        self.seen_stores = set()
-        self.seen_products = set()
-        self._connect()
+        url = url or os.getenv("SUPABASE_URL")
+        key = key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+        if not url or not key:
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set"
+            )
+        self.client: Client = create_client(url, key)
+        self.seen_stores: set = set()
+        self.seen_products: set = set()
+        Logger.info("Supabase REST client initialised (url=%s)", url)
 
-    def _connect(self):
-        try:
-            self.conn = psycopg2.connect(self.uri)
-            self.conn.autocommit = True
-            Logger.info("Successfully connected to Supabase PostgreSQL")
-        except Exception as e:
-            Logger.error("Error connecting to Supabase: %s", str(e))
-            raise e
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
 
-    def _test_connection(self):
-        """Test the connection."""
+    def _upsert_batch(
+        self,
+        table: str,
+        records: list,
+        on_conflict: str,
+        ignore_duplicates: bool = False,
+    ) -> None:
+        """Upsert *records* into *table* in safe-sized batches via PostgREST."""
+        if not records:
+            return
+        for i in range(0, len(records), _BATCH_SIZE):
+            chunk = records[i : i + _BATCH_SIZE]
+            self.client.table(table).upsert(
+                chunk,
+                on_conflict=on_conflict,
+                ignore_duplicates=ignore_duplicates,
+            ).execute()
+
+    def _fetch_all_pages(self, table: str, columns: str) -> list:
+        """Fetch every row from *table*, paginating through PostgREST results."""
+        all_rows: list = []
+        page = 0
+        while True:
+            result = (
+                self.client.table(table)
+                .select(columns)
+                .range(page * _BATCH_SIZE, (page + 1) * _BATCH_SIZE - 1)
+                .execute()
+            )
+            all_rows.extend(result.data)
+            if len(result.data) < _BATCH_SIZE:
+                break
+            page += 1
+        return all_rows
+
+    def _test_connection(self) -> None:
+        """Verify that the REST client can reach the project."""
         try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            Logger.info("Supabase connection test successful")
+            self.client.table("processed_files").select("file_name", count="exact").limit(0).execute()
+            Logger.info("Supabase REST connection test successful")
         except Exception as e:
-            Logger.error("Supabase connection test failed: %s", str(e))
-            self._connect()
+            Logger.error("Supabase REST connection test failed: %s", str(e))
+            raise
+
+    # ------------------------------------------------------------------
+    # routing
+    # ------------------------------------------------------------------
 
     def _insert_to_destinations(self, table_target_name, items):
-        """Insert items into Supabase tables with mapping."""
+        """Route items to the correct upsert method based on table name."""
         if not items:
             return
 
@@ -108,157 +147,129 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         else:
             Logger.warning("Unknown table type for Supabase mapping: %s", table_target_name)
 
+    # ------------------------------------------------------------------
+    # processed_files
+    # ------------------------------------------------------------------
+
     def _handle_processed_files(self, items):
-        """Update processed_files table with store metadata."""
-        with self.conn.cursor() as cur:
-            for item in items:
-                if item.get("file_complete") == "true":
-                    file_name = item.get("file_name")
-                    total_expected_records = item.get("total_expected_records", 0)
-                    chain_id = self._clean_id(item.get("chain_id"))
-                    store_id = self._clean_id(item.get("store_id"))
-                    store_name = item.get("store_name")
-                    chain_name = item.get("chain_name")
+        """Upsert file-completion markers into processed_files."""
+        now = datetime.now().isoformat()
+        records = []
+        for item in items:
+            if item.get("file_complete") != "true":
+                continue
+            chain_id = self._clean_id(item.get("chain_id"))
+            store_id = self._clean_id(item.get("store_id"))
+            store_name = item.get("store_name")
 
-                    # If store_name is missing (common in Price files), try to find it in the DB
-                    if not store_name and chain_id and store_id:
-                        try:
-                            cur.execute("SELECT store_name FROM stores WHERE chain_id = %s AND store_id = %s LIMIT 1", (chain_id, store_id))
-                            row = cur.fetchone()
-                            if row:
-                                store_name = row[0]
-                        except Exception as e:
-                            Logger.warning(f"Failed to lookup store name for {chain_id}-{store_id}: {e}")
-                            self.conn.rollback()
+            # If store_name is missing, try to look it up via the REST API
+            if not store_name and chain_id and store_id:
+                try:
+                    result = (
+                        self.client.table("stores")
+                        .select("store_name")
+                        .eq("chain_id", chain_id)
+                        .eq("store_id", store_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    if result.data:
+                        store_name = result.data[0].get("store_name")
+                except Exception as e:
+                    Logger.warning(
+                        "Failed to lookup store name for %s-%s: %s", chain_id, store_id, e
+                    )
 
-                    cur.execute("""
-                        INSERT INTO processed_files (file_name, file_path, file_hash, file_size, file_type, record_count, processed_at, chain_id, store_id, store_name, chain_name)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (file_name) DO UPDATE SET
-                            processed_at = EXCLUDED.processed_at,
-                            record_count = EXCLUDED.record_count,
-                            chain_id = EXCLUDED.chain_id,
-                            store_id = EXCLUDED.store_id,
-                            store_name = EXCLUDED.store_name,
-                            chain_name = EXCLUDED.chain_name
-                    """, (
-                        file_name,
-                        "", 
-                        "", 
-                        0,  
-                        "", 
-                        total_expected_records,
-                        datetime.now(),
-                        chain_id,
-                        store_id,
-                        store_name,
-                        chain_name
-                    ))
+            records.append({
+                "file_name": item.get("file_name"),
+                "file_path": "",
+                "file_hash": "",
+                "file_size": 0,
+                "file_type": "",
+                "record_count": item.get("total_expected_records", 0),
+                "processed_at": now,
+                "chain_id": chain_id,
+                "store_id": store_id,
+                "store_name": store_name,
+                "chain_name": item.get("chain_name"),
+            })
+
+        self._upsert_batch("processed_files", records, on_conflict="file_name")
+
+    # ------------------------------------------------------------------
+    # stores
+    # ------------------------------------------------------------------
 
     def _upsert_stores(self, items):
-        """Map and upsert stores."""
-        query = """
-            INSERT INTO stores (chain_id, chain_name, last_update_date, last_update_time, store_id, bikoret_no, store_type, store_name, address, city, zip_code, created_at, updated_at)
-            VALUES %s
-            ON CONFLICT (chain_id, store_id) DO UPDATE SET
-                chain_name = EXCLUDED.chain_name,
-                last_update_date = EXCLUDED.last_update_date,
-                last_update_time = EXCLUDED.last_update_time,
-                bikoret_no = EXCLUDED.bikoret_no,
-                store_type = EXCLUDED.store_type,
-                store_name = EXCLUDED.store_name,
-                address = EXCLUDED.address,
-                city = EXCLUDED.city,
-                zip_code = EXCLUDED.zip_code,
-                updated_at = EXCLUDED.updated_at
-        """
-        values_dict = {}
-        now = datetime.now()
+        """Map and upsert stores via REST API."""
+        now = datetime.now().isoformat()
+        records_dict: dict = {}
         for item in items:
             content = item.get("content", {})
             chain_id = self._clean_id(self._get_val(content, "ChainId"))
             store_id = self._clean_id(self._get_val(content, "StoreId"))
             key = (chain_id, store_id)
-            
-            if not chain_id or not store_id:
-                continue
-            
-            if key in self.seen_stores:
+
+            if not chain_id or not store_id or key in self.seen_stores or key in records_dict:
                 continue
 
-            last_update_date = self._get_val(content, "LastUpdateDate")
-            last_update_time = self._get_val(content, "LastUpdateTime")
-            
-            values_dict[key] = (
-                chain_id,
-                self._get_val(content, "ChainName") or self._get_val(content, "ChainNm"),
-                last_update_date,
-                last_update_time,
-                store_id,
-                self._clean_id(self._get_val(content, "BikoretNo")),
-                self._get_val(content, "StoreType"),
-                self._get_val(content, "StoreName") or self._get_val(content, "StoreNm"),
-                self._get_val(content, "Address") or self._get_val(content, "Addr"),
-                self._get_val(content, "City"),
-                self._get_val(content, "ZipCode"),
-                now,
-                now
-            )
-        
-        if not values_dict:
+            records_dict[key] = {
+                "chain_id": chain_id,
+                "chain_name": self._get_val(content, "ChainName") or self._get_val(content, "ChainNm"),
+                "last_update_date": self._get_val(content, "LastUpdateDate"),
+                "last_update_time": self._get_val(content, "LastUpdateTime"),
+                "store_id": store_id,
+                "bikoret_no": self._clean_id(self._get_val(content, "BikoretNo")),
+                "store_type": self._get_val(content, "StoreType"),
+                "store_name": self._get_val(content, "StoreName") or self._get_val(content, "StoreNm"),
+                "address": self._get_val(content, "Address") or self._get_val(content, "Addr"),
+                "city": self._get_val(content, "City"),
+                "zip_code": self._get_val(content, "ZipCode"),
+                "created_at": now,
+                "updated_at": now,
+            }
+
+        if not records_dict:
             return
 
-        Logger.info("Upserting %d stores into Supabase", len(values_dict))
-        with self.conn.cursor() as cur:
-            execute_values(cur, query, list(values_dict.values()))
-        
-        # Mark as seen
-        self.seen_stores.update(values_dict.keys())
+        Logger.info("Upserting %d stores via Supabase API", len(records_dict))
+        self._upsert_batch("stores", list(records_dict.values()), on_conflict="chain_id,store_id")
+        self.seen_stores.update(records_dict.keys())
+
+    # ------------------------------------------------------------------
+    # prices
+    # ------------------------------------------------------------------
 
     def _upsert_prices(self, items):
-        """Map and upsert products and prices using JSONB map for store prices."""
+        """Map and upsert products and prices via REST API.
+
+        store_prices is built by local aggregation so the full JSONB is sent in
+        a single upsert — no server-side JSONB merge needed.
+        """
         # Ensure stores and products exist for foreign keys
         self._ensure_stores_exist(items)
         self._upsert_products(items)
-        
-        query = """
-            INSERT INTO prices (chain_id, item_code, base_price, store_prices, available_in_store_ids, item_type, unit_qty, quantity, unit_of_measure, b_is_weighted, qty_in_package, price_update_date, allow_discount, item_status, item_id, created_at, updated_at)
-            VALUES %s
-            ON CONFLICT (chain_id, item_code) DO UPDATE SET
-                store_prices = prices.store_prices || EXCLUDED.store_prices,
-                available_in_store_ids = ARRAY(SELECT DISTINCT UNNEST(prices.available_in_store_ids || EXCLUDED.available_in_store_ids)),
-                item_type = EXCLUDED.item_type,
-                unit_qty = EXCLUDED.unit_qty,
-                quantity = EXCLUDED.quantity,
-                unit_of_measure = EXCLUDED.unit_of_measure,
-                b_is_weighted = EXCLUDED.b_is_weighted,
-                qty_in_package = EXCLUDED.qty_in_package,
-                price_update_date = EXCLUDED.price_update_date,
-                allow_discount = EXCLUDED.allow_discount,
-                item_status = EXCLUDED.item_status,
-                item_id = EXCLUDED.item_id,
-                updated_at = EXCLUDED.updated_at
-        """
-        
-        # We process all items and aggregate by (chain_id, item_code)
-        # to minimize JSONB updates per batch and do a single insert
-        aggregated_values = {}
-        now = datetime.now()
-        
+
+        now = datetime.now().isoformat()
+        today = datetime.now().strftime("%Y-%m-%d")
+        aggregated: dict = {}
+
         for item in items:
             content = item.get("content", {})
             chain_id = self._clean_id(self._get_val(content, "ChainId"))
             store_id = self._clean_id(self._get_val(content, "StoreId"))
             item_code = self._clean_id(self._get_val(content, "ItemCode"))
-            
+
             if not chain_id or not store_id or not item_code:
                 continue
-                
+
             key = (chain_id, item_code)
             item_price = self._get_val(content, "ItemPrice")
-            
-            if key not in aggregated_values:
-                aggregated_values[key] = {
+
+            if key not in aggregated:
+                aggregated[key] = {
+                    "chain_id": chain_id,
+                    "item_code": item_code,
                     "base_price": item_price,
                     "store_prices": {store_id: item_price},
                     "available_in_store_ids": [store_id],
@@ -266,177 +277,140 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "unit_qty": self._get_val(content, "UnitQty"),
                     "quantity": self._get_val(content, "Quantity"),
                     "unit_of_measure": self._get_val(content, "UnitOfMeasure"),
-                    "b_is_weighted": bool(self._get_val(content, "bisweighted", self._get_val(content, "bIsWeighted", False))),
+                    "b_is_weighted": bool(
+                        self._get_val(
+                            content, "bisweighted",
+                            self._get_val(content, "bIsWeighted", False),
+                        )
+                    ),
                     "qty_in_package": self._get_val(content, "QtyInPackage"),
-                    "price_update_date": self._get_val(content, "priceupdatetime") or self._get_val(content, "PriceUpdateDate") or now.strftime("%Y-%m-%d"),
+                    "price_update_date": (
+                        self._get_val(content, "priceupdatetime")
+                        or self._get_val(content, "PriceUpdateDate")
+                        or today
+                    ),
                     "allow_discount": self._get_val(content, "AllowDiscount"),
                     "item_status": self._get_val(content, "ItemStatus"),
-                    "item_id": self._get_val(content, "ItemId")
+                    "item_id": self._get_val(content, "ItemId"),
+                    "created_at": now,
+                    "updated_at": now,
                 }
             else:
-                aggregated_values[key]["store_prices"][store_id] = item_price
-                if store_id not in aggregated_values[key]["available_in_store_ids"]:
-                    aggregated_values[key]["available_in_store_ids"].append(store_id)
+                aggregated[key]["store_prices"][store_id] = item_price
+                if store_id not in aggregated[key]["available_in_store_ids"]:
+                    aggregated[key]["available_in_store_ids"].append(store_id)
 
-        if not aggregated_values:
+        if not aggregated:
             return
 
-        values = []
-        for (chain_id, item_code), data in aggregated_values.items():
-            values.append((
-                chain_id,
-                item_code,
-                data["base_price"],
-                Json(data["store_prices"]),
-                data["available_in_store_ids"],
-                data["item_type"],
-                data["unit_qty"],
-                data["quantity"],
-                data["unit_of_measure"],
-                data["b_is_weighted"],
-                data["qty_in_package"],
-                data["price_update_date"],
-                data["allow_discount"],
-                data["item_status"],
-                data["item_id"],
-                now,
-                now
-            ))
+        Logger.info("Upserting %d prices via Supabase API", len(aggregated))
+        self._upsert_batch("prices", list(aggregated.values()), on_conflict="chain_id,item_code")
 
-        Logger.info("Upserting %d prices into Supabase", len(values))
-        with self.conn.cursor() as cur:
-            execute_values(cur, query, values)
+    # ------------------------------------------------------------------
+    # products
+    # ------------------------------------------------------------------
 
     def _upsert_products(self, items):
-        """Upsert product information."""
-        query = """
-            INSERT INTO products (item_code, item_name, manufacturer_name, manufacture_country, manufacturer_item_description, created_at, updated_at)
-            VALUES %s
-            ON CONFLICT (item_code) DO UPDATE SET
-                item_name = EXCLUDED.item_name,
-                manufacturer_name = EXCLUDED.manufacturer_name,
-                manufacture_country = EXCLUDED.manufacture_country,
-                manufacturer_item_description = EXCLUDED.manufacturer_item_description,
-                updated_at = EXCLUDED.updated_at
-        """
-        values = []
-        now = datetime.now()
-        seen_items = set()
+        """Upsert product information via REST API."""
+        now = datetime.now().isoformat()
+        records: dict = {}
         for item in items:
             content = item.get("content", {})
             item_code = self._clean_id(self._get_val(content, "ItemCode"))
-            if not item_code or item_code in seen_items or item_code in self.seen_products:
+            if not item_code or item_code in records or item_code in self.seen_products:
                 continue
-            seen_items.add(item_code)
-            
-            values.append((
-                item_code,
-                self._get_val(content, "ItemName") or self._get_val(content, "ItemNm"),
-                self._get_val(content, "manufacturename") or self._get_val(content, "ManufacturerName") or self._get_val(content, "ManufacturerNm"),
-                self._get_val(content, "ManufactureCountry") or self._get_val(content, "ManufactureCountryNm"),
-                self._get_val(content, "manufactureitemdescription") or self._get_val(content, "ManufacturerItemDescription") or self._get_val(content, "ItemNm"),
-                now,
-                now
-            ))
-        
-        if values:
-            Logger.info("Upserting %d products into Supabase", len(values))
-            with self.conn.cursor() as cur:
-                execute_values(cur, query, values)
-            
-            # Mark as seen
-            self.seen_products.update(seen_items)
+
+            records[item_code] = {
+                "item_code": item_code,
+                "item_name": self._get_val(content, "ItemName") or self._get_val(content, "ItemNm"),
+                "manufacturer_name": (
+                    self._get_val(content, "manufacturename")
+                    or self._get_val(content, "ManufacturerName")
+                    or self._get_val(content, "ManufacturerNm")
+                ),
+                "manufacture_country": (
+                    self._get_val(content, "ManufactureCountry")
+                    or self._get_val(content, "ManufactureCountryNm")
+                ),
+                "manufacturer_item_description": (
+                    self._get_val(content, "manufactureitemdescription")
+                    or self._get_val(content, "ManufacturerItemDescription")
+                    or self._get_val(content, "ItemNm")
+                ),
+                "created_at": now,
+                "updated_at": now,
+            }
+
+        if not records:
+            return
+
+        Logger.info("Upserting %d products via Supabase API", len(records))
+        self._upsert_batch("products", list(records.values()), on_conflict="item_code")
+        self.seen_products.update(records.keys())
+
+    # ------------------------------------------------------------------
+    # promotions
+    # ------------------------------------------------------------------
 
     def _upsert_promos(self, items):
-        """Map and upsert promotions using JSONB store mapping."""
-        # Ensure stores exist for foreign key
+        """Map and upsert promotions via REST API."""
         self._ensure_stores_exist(items)
-        query = """
-            INSERT INTO promotions (
-                chain_id, promotion_id, sub_chain_id, bikoret_no, promotion_description, 
-                promotion_update_date, promotion_start_date, promotion_start_hour, 
-                promotion_end_date, promotion_end_hour, promotion_days, redemption_limit,
-                reward_type, allow_multiple_discounts, is_weighted_promo, is_gift_item, 
-                min_no_of_item_offered, additional_is_coupon, additional_gift_count, 
-                additional_is_total, additional_is_active, additional_restrictions,
-                remarks, min_qty, discounted_price, discounted_price_per_mida, 
-                weight_unit, club_id, items, store_promotions, available_in_store_ids, 
-                created_at, updated_at
-            )
-            VALUES %s
-            ON CONFLICT (chain_id, promotion_id) DO UPDATE SET
-                store_promotions = promotions.store_promotions || EXCLUDED.store_promotions,
-                available_in_store_ids = ARRAY(SELECT DISTINCT UNNEST(promotions.available_in_store_ids || EXCLUDED.available_in_store_ids)),
-                sub_chain_id = EXCLUDED.sub_chain_id,
-                bikoret_no = EXCLUDED.bikoret_no,
-                promotion_description = EXCLUDED.promotion_description,
-                promotion_update_date = EXCLUDED.promotion_update_date,
-                promotion_start_date = EXCLUDED.promotion_start_date,
-                promotion_start_hour = EXCLUDED.promotion_start_hour,
-                promotion_end_date = EXCLUDED.promotion_end_date,
-                promotion_end_hour = EXCLUDED.promotion_end_hour,
-                promotion_days = EXCLUDED.promotion_days,
-                redemption_limit = EXCLUDED.redemption_limit,
-                reward_type = EXCLUDED.reward_type,
-                allow_multiple_discounts = EXCLUDED.allow_multiple_discounts,
-                is_weighted_promo = EXCLUDED.is_weighted_promo,
-                is_gift_item = EXCLUDED.is_gift_item,
-                min_no_of_item_offered = EXCLUDED.min_no_of_item_offered,
-                additional_is_coupon = EXCLUDED.additional_is_coupon,
-                additional_gift_count = EXCLUDED.additional_gift_count,
-                additional_is_total = EXCLUDED.additional_is_total,
-                additional_is_active = EXCLUDED.additional_is_active,
-                additional_restrictions = EXCLUDED.additional_restrictions,
-                remarks = EXCLUDED.remarks,
-                min_qty = EXCLUDED.min_qty,
-                discounted_price = EXCLUDED.discounted_price,
-                discounted_price_per_mida = EXCLUDED.discounted_price_per_mida,
-                weight_unit = EXCLUDED.weight_unit,
-                club_id = EXCLUDED.club_id,
-                items = EXCLUDED.items,
-                updated_at = EXCLUDED.updated_at
-        """
-        aggregated_values = {}
         now = datetime.now()
-        
+        now_iso = now.isoformat()
+        aggregated: dict = {}
+
         for item in items:
             content = item.get("content", {})
             chain_id = self._clean_id(self._get_val(content, "ChainId"))
             store_id = self._clean_id(self._get_val(content, "StoreId"))
             promotion_id = self._clean_id(self._get_val(content, "PromotionId"))
-            
+
             if not chain_id or not store_id or not promotion_id:
                 continue
 
             key = (chain_id, promotion_id)
-            # Use MinNoOfItemOffered or MinQty as the value for store_promotions to avoid nulls
             store_promo_val = (
-                self._get_val(content, "MinNoOfItemOffered") or 
-                self._get_val(content, "minnoofitemoffered") or 
-                self._get_val(content, "MinQty") or 
-                "active"
+                self._get_val(content, "MinNoOfItemOffered")
+                or self._get_val(content, "minnoofitemoffered")
+                or self._get_val(content, "MinQty")
+                or "active"
             )
 
-            if key not in aggregated_values:
-                # Extract groups/items and ensure it is a dict/list for Json()
-                promotion_items = self._get_val(content, "groups") or self._get_val(content, "PromotionItems") or []
+            if key not in aggregated:
+                promotion_items = (
+                    self._get_val(content, "groups")
+                    or self._get_val(content, "PromotionItems")
+                    or []
+                )
                 if isinstance(promotion_items, str):
                     try:
-                        # Convert JS-like dict string to valid JSON if needed
-                        # (The scraper output sometimes uses single quotes)
                         json_str = promotion_items.replace("'", '"').replace("None", "null")
                         promotion_items = json.loads(json_str)
-                    except:
+                    except Exception:
                         promotion_items = []
 
-                aggregated_values[key] = {
+                aggregated[key] = {
+                    "chain_id": chain_id,
+                    "promotion_id": promotion_id,
                     "sub_chain_id": self._clean_id(self._get_val(content, "SubChainId")),
                     "bikoret_no": self._clean_id(self._get_val(content, "BikoretNo")),
                     "promotion_description": self._get_val(content, "PromotionDescription"),
-                    "promotion_update_date": self._get_val(content, "promotionupdatetime") or self._get_val(content, "PromotionUpdateDate") or now.strftime("%Y-%m-%d"),
-                    "promotion_start_date": self._get_val(content, "promotionstartdatetime") or self._get_val(content, "PromotionStartDate") or now.strftime("%Y-%m-%d"),
+                    "promotion_update_date": (
+                        self._get_val(content, "promotionupdatetime")
+                        or self._get_val(content, "PromotionUpdateDate")
+                        or now.strftime("%Y-%m-%d")
+                    ),
+                    "promotion_start_date": (
+                        self._get_val(content, "promotionstartdatetime")
+                        or self._get_val(content, "PromotionStartDate")
+                        or now.strftime("%Y-%m-%d")
+                    ),
                     "promotion_start_hour": self._get_val(content, "PromotionStartHour") or "00:00",
-                    "promotion_end_date": self._get_val(content, "promotionenddatetime") or self._get_val(content, "PromotionEndDate") or "2099-12-31",
+                    "promotion_end_date": (
+                        self._get_val(content, "promotionenddatetime")
+                        or self._get_val(content, "PromotionEndDate")
+                        or "2099-12-31"
+                    ),
                     "promotion_end_hour": self._get_val(content, "PromotionEndHour") or "23:59",
                     "promotion_days": self._get_val(content, "PromotionDays"),
                     "redemption_limit": self._get_val(content, "RedemptionLimit"),
@@ -444,7 +418,10 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "allow_multiple_discounts": self._get_val(content, "AllowMultipleDiscounts"),
                     "is_weighted_promo": bool(self._get_val(content, "isWeightedPromo", False)),
                     "is_gift_item": self._get_val(content, "IsGiftItem"),
-                    "min_no_of_item_offered": self._get_val(content, "MinNoOfItemOffered") or self._get_val(content, "minnoofitemoffered"),
+                    "min_no_of_item_offered": (
+                        self._get_val(content, "MinNoOfItemOffered")
+                        or self._get_val(content, "minnoofitemoffered")
+                    ),
                     "additional_is_coupon": self._get_val(content, "AdditionalIsCoupon"),
                     "additional_gift_count": self._get_val(content, "AdditionalGiftCount"),
                     "additional_is_total": self._get_val(content, "AdditionalIsTotal"),
@@ -458,124 +435,71 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "club_id": self._get_val(content, "ClubId"),
                     "items": promotion_items,
                     "store_promotions": {store_id: store_promo_val},
-                    "available_in_store_ids": [store_id]
+                    "available_in_store_ids": [store_id],
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
                 }
             else:
-                aggregated_values[key]["store_promotions"][store_id] = store_promo_val
-                if store_id not in aggregated_values[key]["available_in_store_ids"]:
-                    aggregated_values[key]["available_in_store_ids"].append(store_id)
-        
-        if not aggregated_values:
+                aggregated[key]["store_promotions"][store_id] = store_promo_val
+                if store_id not in aggregated[key]["available_in_store_ids"]:
+                    aggregated[key]["available_in_store_ids"].append(store_id)
+
+        if not aggregated:
             return
 
-        values = []
-        for (chain_id, promotion_id), data in aggregated_values.items():
-            values.append((
-                chain_id,
-                promotion_id,
-                data["sub_chain_id"],
-                data["bikoret_no"],
-                data["promotion_description"],
-                data["promotion_update_date"],
-                data["promotion_start_date"],
-                data["promotion_start_hour"],
-                data["promotion_end_date"],
-                data["promotion_end_hour"],
-                data["promotion_days"],
-                data["redemption_limit"],
-                data["reward_type"],
-                data["allow_multiple_discounts"],
-                data["is_weighted_promo"],
-                data["is_gift_item"],
-                data["min_no_of_item_offered"],
-                data["additional_is_coupon"],
-                data["additional_gift_count"],
-                data["additional_is_total"],
-                data["additional_is_active"],
-                data["additional_restrictions"],
-                data["remarks"],
-                data["min_qty"],
-                data["discounted_price"],
-                data["discounted_price_per_mida"],
-                data["weight_unit"],
-                data["club_id"],
-                Json(data["items"]),
-                Json(data["store_promotions"]),
-                data["available_in_store_ids"],
-                now,
-                now
-            ))
+        Logger.info("Upserting %d promotions via Supabase API", len(aggregated))
+        self._upsert_batch("promotions", list(aggregated.values()), on_conflict="chain_id,promotion_id")
 
-        Logger.info("Upserting %d promotions into Supabase", len(values))
-        with self.conn.cursor() as cur:
-            execute_values(cur, query, values)
-
-
+    # ------------------------------------------------------------------
+    # ensure stores exist (FK guard)
+    # ------------------------------------------------------------------
 
     def _ensure_stores_exist(self, items):
-        """Ensure all stores referenced in items exist in the stores table.
-        This prevents ForeignKeyViolations if metadata is missing.
-        """
-        query = """
-            INSERT INTO stores (chain_id, store_id, created_at, updated_at)
-            VALUES %s
-            ON CONFLICT (chain_id, store_id) DO NOTHING
-        """
-        now = datetime.now()
-        values = []
-        seen = set()
+        """Insert minimal store rows so FK constraints don't fire on price/promo upserts."""
+        now = datetime.now().isoformat()
+        records: list = []
+        seen: set = set()
         for item in items:
             content = item.get("content", {})
             chain_id = self._clean_id(self._get_val(content, "ChainId"))
             store_id = self._clean_id(self._get_val(content, "StoreId"))
             if not chain_id or not store_id:
                 continue
-            
             key = (chain_id, store_id)
             if key not in seen and key not in self.seen_stores:
-                values.append((chain_id, store_id, now, now))
+                records.append({"chain_id": chain_id, "store_id": store_id, "created_at": now, "updated_at": now})
                 seen.add(key)
-        
-        if values:
-            Logger.info("Ensuring %d referenced stores exist in Supabase", len(values))
-            with self.conn.cursor() as cur:
-                execute_values(cur, query, values)
-            
-            # Mark as seen
+
+        if records:
+            Logger.info("Ensuring %d referenced stores exist via Supabase API", len(records))
+            self._upsert_batch("stores", records, on_conflict="chain_id,store_id", ignore_duplicates=True)
             self.seen_stores.update(seen)
+
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
 
     def restart_database(
         self, enabled_scrapers: list[str], enabled_file_types: list[str]
     ):
-        """Supabase uses persistent storage, so we don't wipe it by default on restart.
-        
-        Regular short-term databases (Mongo/Kafka) wipe on every new run if no cache exists.
-        For Supabase, we prefer to keep historical data and let ON CONFLICT handle updates.
-        """
+        """Supabase uses persistent storage — skip the wipe, just verify connectivity."""
         Logger.info("Supabase persistence mode: skipping database wipe on restart.")
-        # We still ensure connection is fine
         self._test_connection()
 
+    # ------------------------------------------------------------------
+    # cache sync
+    # ------------------------------------------------------------------
+
     def sync_cache(self, local_cache):
-        """Sync remote database state to the local cache.
-        
-        This allows ephemeral runners (like GitHub Actions) to know which files 
-        were already processed by querying the 'processed_files' table.
-        """
+        """Sync remote database state to the local cache."""
         Logger.info("Syncing local cache from Supabase 'processed_files' table...")
         try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT file_name, record_count FROM processed_files")
-                rows = cur.fetchall()
-                for file_name, record_count in rows:
-                    if record_count > 0:
-                        # Mark as fully processed (using record_count - 1 as the last row index)
-                        local_cache.update_last_processed_row(file_name, record_count - 1)
-                
-                # Also reset local memory cache for a fresh run
-                self.seen_stores = set()
-                self.seen_products = set()
-                
+            rows = self._fetch_all_pages("processed_files", "file_name,record_count")
+            for row in rows:
+                if row.get("record_count", 0) > 0:
+                    local_cache.update_last_processed_row(row["file_name"], row["record_count"] - 1)
+            self.seen_stores = set()
+            self.seen_products = set()
             Logger.info("Local cache synced successfully with %d files.", len(rows))
         except Exception as e:
             Logger.warning("Failed to sync cache from Supabase: %s", str(e))
@@ -583,9 +507,8 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     def get_processed_files_names(self):
         """Get the set of processed filenames from the database."""
         try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT file_name FROM processed_files")
-                return {row[0] for row in cur.fetchall()}
+            rows = self._fetch_all_pages("processed_files", "file_name")
+            return {row["file_name"] for row in rows}
         except Exception as e:
             Logger.warning("Failed to fetch processed files from Supabase: %s", str(e))
             return set()
@@ -593,30 +516,47 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     def get_processed_files_metadata(self):
         """Get metadata (file_name, chain_name) for all processed files."""
         try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT file_name, chain_name FROM processed_files")
-                return [{"file_name": row[0], "chain_name": row[1]} for row in cur.fetchall()]
+            rows = self._fetch_all_pages("processed_files", "file_name,chain_name")
+            return [{"file_name": row["file_name"], "chain_name": row.get("chain_name")} for row in rows]
         except Exception as e:
             Logger.warning("Failed to fetch processed files metadata from Supabase: %s", str(e))
             return []
 
+    # ------------------------------------------------------------------
+    # admin
+    # ------------------------------------------------------------------
+
     def _clean_all_destinations(self):
-        """Cleanup specific tables."""
-        with self.conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE stores, products, prices, promotions, processed_files CASCADE")
-        Logger.info("Supabase database tables truncated.")
+        """Delete every row from all managed tables via REST API."""
+        for table, col in [
+            ("processed_files", "file_name"),
+            ("promotions", "chain_id"),
+            ("prices", "chain_id"),
+            ("products", "item_code"),
+            ("stores", "chain_id"),
+        ]:
+            Logger.info("Clearing table %s...", table)
+            self.client.table(table).delete().not_.is_(col, "null").execute()
+        Logger.info("Supabase tables cleared via REST API.")
 
     def _is_collection_updated(self, collection_name: str, seconds: int = 10800) -> bool:
         """Check if any data was updated recently."""
-        # For Supabase, we check the latest processed_at in processed_files
         try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT MAX(processed_at) FROM processed_files")
-                last_update = cur.fetchone()[0]
-                if not last_update:
-                    return False
-                return (datetime.now() - last_update).total_seconds() < seconds
-        except:
+            result = (
+                self.client.table("processed_files")
+                .select("processed_at")
+                .order("processed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                return False
+            last_update_str = result.data[0]["processed_at"]
+            last_update = datetime.fromisoformat(last_update_str.replace("Z", "+00:00"))
+            if last_update.tzinfo is not None:
+                last_update = last_update.replace(tzinfo=None)
+            return (datetime.now() - last_update).total_seconds() < seconds
+        except Exception:
             return False
 
     def _list_destinations(self):

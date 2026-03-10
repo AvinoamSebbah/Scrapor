@@ -8,40 +8,55 @@ sys.modules['utils'] = MagicMock()
 from remotes.short_term.supabase_db import SupabaseUploader
 
 def check_db_status(clear=False):
-    url = os.getenv("SUPABASE_DATABASE_URL")
-    if not url:
-        print("Error: SUPABASE_DATABASE_URL not set.")
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    if not url or not key:
+        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) not set.")
         return
 
     try:
-        uploader = SupabaseUploader(url)
-        
+        uploader = SupabaseUploader()
+
         if clear:
             print("Clearing database...")
-            with uploader.conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE stores, products, prices, promotions, processed_files CASCADE")
+            uploader._clean_all_destinations()
             print("Database cleared.")
 
-        with uploader.conn.cursor() as cur:
-            tables = ["stores", "products", "prices", "promotions", "processed_files"]
-            print("Row Counts:")
-            for table in tables:
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
-                    count = cur.fetchone()[0]
-                    print(f"  {table}: {count}")
-                except Exception as e:
-                    print(f"  {table}: ERROR ({e})")
-                    uploader.conn.rollback()
-            
-            print("Detailed Sampling:")
-            # Check for non-null manufacturers
-            cur.execute("SELECT COUNT(*) FROM products WHERE manufacturer_name IS NOT NULL AND manufacturer_name != ''")
-            print(f"  Products with manufacturer: {cur.fetchone()[0]}")
-            
-            # Check for promotion dates
-            cur.execute("SELECT COUNT(*) FROM promotions WHERE promotion_start_date > '2020-01-01'")
-            print(f"  Promotions with start date: {cur.fetchone()[0]}")
+        client = uploader.client
+        tables = ["stores", "products", "prices", "promotions", "processed_files"]
+        print("Row Counts:")
+        for table in tables:
+            try:
+                result = client.table(table).select("*", count="exact").limit(0).execute()
+                print(f"  {table}: {result.count}")
+            except Exception as e:
+                print(f"  {table}: ERROR ({e})")
+
+        print("Detailed Sampling:")
+        try:
+            result = (
+                client.table("products")
+                .select("*", count="exact")
+                .not_.is_("manufacturer_name", "null")
+                .neq("manufacturer_name", "")
+                .limit(0)
+                .execute()
+            )
+            print(f"  Products with manufacturer: {result.count}")
+        except Exception as e:
+            print(f"  Products with manufacturer: ERROR ({e})")
+
+        try:
+            result = (
+                client.table("promotions")
+                .select("*", count="exact")
+                .gt("promotion_start_date", "2020-01-01")
+                .limit(0)
+                .execute()
+            )
+            print(f"  Promotions with start date: {result.count}")
+        except Exception as e:
+            print(f"  Promotions with start date: ERROR ({e})")
 
     except Exception as e:
         print(f"Connection failed: {e}")

@@ -19,7 +19,7 @@ def output_short_term_destination_from_env(output_destination):
     elif output_destination == "file":
         return DummyDocumentDbUploader("./document_db")
     elif output_destination == "supabase":
-        return SupabaseUploader(os.environ.get("SUPABASE_DATABASE_URL"))
+        return SupabaseUploader()
     else:
         raise ValueError(f"Invalid output destination: {output_destination}")
 

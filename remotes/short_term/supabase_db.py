@@ -271,13 +271,15 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             self._handle_processed_files(items)
             return
 
-        # Check the type of data based on table_target_name
+        # Check the type of data based on table_target_name.
+        # Must use startswith so chains with "store" in their name
+        # (e.g. KING_STORE → "price_file_king_store") are not mis-routed.
         name_lower = table_target_name.lower()
-        if "store" in name_lower:
+        if name_lower.startswith("store"):
             self._upsert_stores(items)
-        elif "price" in name_lower:
+        elif name_lower.startswith("price"):
             self._upsert_prices(items)
-        elif "promo" in name_lower:
+        elif name_lower.startswith("promo"):
             self._upsert_promos(items)
         elif "scraperstatus" in name_lower or "parserstatus" in name_lower:
             pass

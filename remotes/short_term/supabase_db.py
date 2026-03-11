@@ -17,10 +17,10 @@ from .api_base import ShortTermDatabaseUploader
 
 # Batch sizes tuned per table — promotions have ~35 fields so smaller chunks
 _BATCH_SIZE_DEFAULT  = 500
-_BATCH_SIZE_PROMOS   = 100
-_BATCH_SIZE_PRICES   = 200
+_BATCH_SIZE_PROMOS   = 50
+_BATCH_SIZE_PRICES   = 50
 # Products are a hot table under concurrent load — smaller batches reduce lock hold time
-_BATCH_SIZE_PRODUCTS = 100
+_BATCH_SIZE_PRODUCTS = 50
 
 # Timeout in seconds for each individual PostgREST request
 _HTTP_TIMEOUT = 120
@@ -142,18 +142,19 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not records:
             return
         batch_size = _BATCH_SIZE_PROMOS if func_name == "merge_promotions" else _BATCH_SIZE_PRICES
+        _waits = [5, 10, 20, 40]
         for i in range(0, len(records), batch_size):
             chunk = records[i : i + batch_size]
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     self.client.rpc(func_name, {"p_records": chunk}).execute()
                     break
                 except Exception as e:
-                    if attempt == 2:
+                    if attempt == 4:
                         raise
-                    wait = 2 ** attempt
+                    wait = _waits[attempt]
                     Logger.warning(
-                        "RPC %s failed (attempt %d/3), retrying in %ds: %s",
+                        "RPC %s failed (attempt %d/5), retrying in %ds: %s",
                         func_name, attempt + 1, wait, e
                     )
                     time.sleep(wait)

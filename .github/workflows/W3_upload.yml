@@ -160,6 +160,7 @@ jobs:
           OUTPUT_DESTINATION: supabase
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ matrix.store }}
           APP_DATA_PATH: ./app_data
@@ -169,9 +170,3 @@ jobs:
           # read from this file instead of querying Supabase again.
           PROCESSED_FILES_CACHE: ./processed_files_cache.json
         run: python main.py
-
-      - name: Normalize stores data (cleanup & city standardization)
-        if: steps.check_scraped.outputs.has_data == 'true'
-        env:
-          PGCLIENTENCODING: UTF8
-        run: psql "${{ secrets.SUPABASE_DATABASE_URL }}" -f scripts/cleanup_stores.sql

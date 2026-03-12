@@ -15,6 +15,31 @@ from supabase import create_client, Client
 from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
+_CLEANUP_STORES_SQL = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "cleanup_stores.sql")
+
+
+def _run_stores_cleanup():
+    """Run cleanup_stores.sql via psycopg2 if SUPABASE_DATABASE_URL is set."""
+    db_url = os.getenv("SUPABASE_DATABASE_URL")
+    if not db_url:
+        return
+    sql_path = os.path.normpath(_CLEANUP_STORES_SQL)
+    if not os.path.isfile(sql_path):
+        Logger.warning("cleanup_stores.sql not found at %s — skipping", sql_path)
+        return
+    try:
+        import psycopg2
+        with open(sql_path, "r", encoding="utf-8") as f:
+            sql = f.read()
+        conn = psycopg2.connect(db_url, connect_timeout=15)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.close()
+        Logger.info("cleanup_stores.sql executed successfully")
+    except Exception as e:
+        Logger.warning("cleanup_stores.sql failed: %s", e)
+
 # Batch sizes tuned per table — promotions have ~35 fields so smaller chunks
 _BATCH_SIZE_DEFAULT  = 500
 _BATCH_SIZE_PROMOS   = 50
@@ -374,6 +399,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         Logger.info("Upserting %d stores via Supabase API", len(records_dict))
         self._upsert_batch("stores", list(records_dict.values()), on_conflict="chain_id,store_id")
         self.seen_stores.update(records_dict.keys())
+        _run_stores_cleanup()
 
     # ------------------------------------------------------------------
     # prices

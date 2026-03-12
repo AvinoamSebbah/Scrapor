@@ -41,6 +41,7 @@ jobs:
           PYTHONUNBUFFERED: '1'
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
         run: python cleanup_db.py --execute
 
   trigger-scrape:

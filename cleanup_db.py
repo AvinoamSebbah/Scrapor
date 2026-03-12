@@ -50,6 +50,7 @@ class DatabaseCleaner:
             except Exception:
                 pass
             self._mode = "rest"
+            self._conn = None  # may be opened on-demand as fallback
             print("[i] Connection mode: supabase-py REST")
         elif db_url:
             import psycopg2
@@ -69,6 +70,31 @@ class DatabaseCleaner:
     # internal: unified query helpers
     # ------------------------------------------------------------------
 
+    def _run_sql(self, sql_count: str, sql_delete: str, params: dict) -> int:
+        """Execute a cleanup operation via psycopg2 direct SQL."""
+        if self._conn is None:
+            db_url = os.getenv("SUPABASE_DATABASE_URL")
+            if not db_url:
+                print("  [!] SUPABASE_DATABASE_URL not set — cannot fall back to direct SQL")
+                return 0
+            import psycopg2
+            self._conn = psycopg2.connect(db_url, connect_timeout=15)
+            self._conn.autocommit = True
+            with self._conn.cursor() as cur:
+                cur.execute("SET statement_timeout = '300s'")
+            print("  [i] Opened psycopg2 fallback connection")
+        try:
+            with self._conn.cursor() as cur:
+                if self.dry_run:
+                    cur.execute(sql_count, params)
+                    return cur.fetchone()[0]
+                else:
+                    cur.execute(sql_delete, params)
+                    return cur.rowcount
+        except Exception as e:
+            print(f"  [!] SQL error: {e}")
+            return 0
+
     def _rpc_or_sql(self, rpc_name: str, params: dict, sql_count: str, sql_delete: str) -> int:
         """Run a cleanup operation via RPC (REST mode) or direct SQL (psycopg2 mode)."""
         if self._mode == "rest":
@@ -82,6 +108,9 @@ class DatabaseCleaner:
                         wait = attempt * 15
                         print(f"  [!] Schema cache not ready (PGRST002), retrying in {wait}s… (attempt {attempt}/4)")
                         time.sleep(wait)
+                    elif "57014" in err:  # statement timeout — fall back to direct SQL
+                        print(f"  [!] RPC timed out (57014) — falling back to direct SQL")
+                        return self._run_sql(sql_count, sql_delete, params)
                     else:
                         print(f"  [!] RPC error: {e}")
                         return 0

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 _HTTP_TIMEOUT = 120
 _PRICES_STALE_DAYS_DEFAULT = 60
-_PROCESSED_FILES_DAYS_DEFAULT = 7
+_PROCESSED_FILES_DAYS_DEFAULT = 2
 
 
 class DatabaseCleaner:

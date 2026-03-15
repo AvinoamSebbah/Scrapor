@@ -1,19 +1,15 @@
 name: "W3 · Upload to PostgreSQL"
 
-# Triggered by W2_scrape.yml after all scrape jobs finish.
+# Triggered by W2_scrape.yml after a specific store scrape job finishes.
 #
-# CONNECTION GUARANTEE: at most ONE PostgreSQL connection is active at any time.
+# CONNECTION GUARANTEE:
+#   Each W3 run handles exactly one store.
 #   Job 1 - fetch-processed-files: one SQL connection -> saves processed_files_cache.json
-#   Jobs 2-36 – upload (max-parallel: 1, SEQUENTIAL): each store uploads in turn.
-#     sync_cache()              → reads local JSON file  (no DB hit)
-#     get_processed_files_names → reads local JSON file  (no DB hit)
-#     _test_connection()        -> 1 fast SELECT 1 query
-#     data upserts / RPC calls  → actual upload work
-#   → Never more than 1 store uploading simultaneously.
+#   Job 2 - upload: uploads only the requested store.
 
-# Only one pipeline (W1/W2/W3) can run at a time.
+# Prevent duplicate uploads for the same store while allowing other stores to upload immediately.
 concurrency:
-  group: supermarket-pipeline
+  group: supermarket-upload-${{ inputs.store }}
   cancel-in-progress: false
 
 on:
@@ -21,6 +17,10 @@ on:
     inputs:
       scrape_run_id:
         description: 'Run ID of W2_scrape.yml that produced the artifacts'
+        required: true
+        type: string
+      store:
+        description: 'Store to upload'
         required: true
         type: string
 
@@ -55,57 +55,13 @@ jobs:
           path: processed_files_cache.json
           retention-days: 1
 
-  # --------------------------------------------------------------------------
-  # SEQUENTIAL uploads - max-parallel: 1 guarantees one DB connection at a time.
-  # Each job reads the pre-fetched cache instead of querying the DB for it.
-  # --------------------------------------------------------------------------
   upload:
-    name: "Upload ${{ matrix.store }} -> PostgreSQL"
+    name: "Upload ${{ inputs.store }} -> PostgreSQL"
     needs: fetch-processed-files
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: read    # needed to download artifacts from scrape_run_id
-
-    strategy:
-      fail-fast: false
-      max-parallel: 1    # ← SEQUENTIAL: only one store uploads at a time
-      matrix:
-        store:
-          - BAREKET
-          - YAYNO_BITAN_AND_CARREFOUR
-          - COFIX
-          - CITY_MARKET_KIRYATGAT
-          - CITY_MARKET_SHOPS
-          - DOR_ALON
-          - GOOD_PHARM
-          - HAZI_HINAM
-          - HET_COHEN
-          - KESHET
-          - KING_STORE
-          - MAAYAN_2000
-          - MAHSANI_ASHUK
-          - NETIV_HASED
-          - MESHMAT_YOSEF_1
-          - MESHMAT_YOSEF_2
-          - OSHER_AD
-          - POLIZER
-          - RAMI_LEVY
-          - SALACH_DABACH
-          - SHEFA_BARCART_ASHEM
-          - SHUFERSAL
-          - SHUK_AHIR
-          - STOP_MARKET
-          - SUPER_PHARM
-          - SUPER_YUDA
-          - SUPER_SAPIR
-          - FRESH_MARKET_AND_SUPER_DOSH
-          - QUIK
-          - TIV_TAAM
-          - VICTORY
-          - YELLOW
-          - YOHANANOF
-          - ZOL_VEBEGADOL
-          - WOLT
 
     steps:
       - uses: actions/checkout@v4
@@ -123,7 +79,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: outputs-${{ matrix.store }}
+          name: outputs-${{ inputs.store }}
           run-id: ${{ inputs.scrape_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./app_data/
@@ -135,7 +91,7 @@ jobs:
             echo "has_data=true" >> $GITHUB_OUTPUT
           else
             echo "has_data=false" >> $GITHUB_OUTPUT
-            echo "⏭️  No artifact for ${{ matrix.store }} — skipping upload"
+            echo "No artifact for ${{ inputs.store }} - skipping upload"
           fi
 
       - name: Download processed-files cache (from this run)
@@ -159,7 +115,7 @@ jobs:
           OUTPUT_DESTINATION: postgres
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           OPERATION: api_update
-          ENABLED_SCRAPERS: ${{ matrix.store }}
+          ENABLED_SCRAPERS: ${{ inputs.store }}
           APP_DATA_PATH: ./app_data
           LOG_LEVEL: WARNING
           TZ: Asia/Jerusalem

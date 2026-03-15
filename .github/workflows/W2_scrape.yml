@@ -6,7 +6,7 @@ name: "W2 · Scrape"
 #   Job 1 - fetch-processed-files: ONE PostgreSQL connection -> saves processed_files_cache.json
 #   Jobs 2-36 – scrape (35 parallel): resolve the cache from the JSON file,
 #     zero PostgreSQL connections during the actual scraping.
-# When every scrape job finishes, trigger-upload fans-in and fires W3.
+# Each store job dispatches its own W3 upload workflow as soon as it finishes.
 
 # Only one pipeline (W1/W2/W3) can run at a time.
 concurrency:
@@ -63,6 +63,9 @@ jobs:
     name: "${{ matrix.store }}"
     needs: fetch-processed-files
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       max-parallel: 10       # Scraping is pure HTTP — full parallelism is safe
@@ -161,25 +164,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-  # --------------------------------------------------------------------------
-  # Fan-in: runs only after EVERY scrape job completes (success or failure).
-  # This is the single trigger point for W3 — guarantees all artifacts exist
-  # before any upload begins.
-  # --------------------------------------------------------------------------
-  trigger-upload:
-    name: "Trigger W3 – Upload"
-    needs: [fetch-processed-files, scrape]   # waits for all 35 matrix jobs
-    if: always()        # run even if some stores failed
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-
-    steps:
-      - name: Start W3_upload (sequential DB upload)
+      - name: Trigger W3 for this store
+        if: success() && steps.check.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run W3_upload.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }} \
-            -f scrape_run_id=${{ github.run_id }}
+            -f scrape_run_id=${{ github.run_id }} \
+            -f store=${{ matrix.store }}

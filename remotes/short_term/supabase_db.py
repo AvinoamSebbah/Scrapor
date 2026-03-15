@@ -105,6 +105,43 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             return Json(value)
         return value
 
+    @staticmethod
+    def _normalize_date(value, default=None):
+        """Normalize date-like values to YYYY-MM-DD to keep SQL casts datestyle-agnostic."""
+        if value is None:
+            return default
+
+        s_val = str(value).strip()
+        if not s_val or s_val.lower() in {"nan", "none", "null"}:
+            return default
+
+        s_val = s_val.replace("T", " ")
+        formats = (
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%d/%m/%Y",
+            "%d-%m-%Y",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y/%m/%d %H:%M:%S",
+            "%d/%m/%Y %H:%M",
+            "%d/%m/%Y %H:%M:%S",
+            "%d-%m-%Y %H:%M",
+            "%d-%m-%Y %H:%M:%S",
+        )
+
+        for fmt in formats:
+            try:
+                return datetime.strptime(s_val, fmt).date().isoformat()
+            except ValueError:
+                continue
+
+        try:
+            return datetime.fromisoformat(s_val).date().isoformat()
+        except ValueError:
+            return default
+
     def __init__(self, url=None, key=None, database_url=None):
         """Initialise PostgreSQL client.
 
@@ -625,21 +662,21 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "sub_chain_id": self._clean_id(self._get_val(content, "SubChainId")),
                     "bikoret_no": self._clean_id(self._get_val(content, "BikoretNo")),
                     "promotion_description": self._get_val(content, "PromotionDescription"),
-                    "promotion_update_date": (
+                    "promotion_update_date": self._normalize_date(
                         self._get_val(content, "promotionupdatetime")
-                        or self._get_val(content, "PromotionUpdateDate")
-                        or now.strftime("%Y-%m-%d")
+                        or self._get_val(content, "PromotionUpdateDate"),
+                        now.strftime("%Y-%m-%d"),
                     ),
-                    "promotion_start_date": (
+                    "promotion_start_date": self._normalize_date(
                         self._get_val(content, "promotionstartdatetime")
-                        or self._get_val(content, "PromotionStartDate")
-                        or now.strftime("%Y-%m-%d")
+                        or self._get_val(content, "PromotionStartDate"),
+                        now.strftime("%Y-%m-%d"),
                     ),
                     "promotion_start_hour": self._get_val(content, "PromotionStartHour") or "00:00",
-                    "promotion_end_date": (
+                    "promotion_end_date": self._normalize_date(
                         self._get_val(content, "promotionenddatetime")
-                        or self._get_val(content, "PromotionEndDate")
-                        or "2099-12-31"
+                        or self._get_val(content, "PromotionEndDate"),
+                        "2099-12-31",
                     ),
                     "promotion_end_hour": self._get_val(content, "PromotionEndHour") or "23:59",
                     "promotion_days": self._get_val(content, "PromotionDays"),

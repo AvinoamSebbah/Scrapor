@@ -94,13 +94,39 @@ def update_functions():
           SELECT
             r->>'chain_id', r->>'promotion_id', r->>'sub_chain_id', r->>'bikoret_no',
             r->>'promotion_description',
-            CASE WHEN (r->>'promotion_update_date') IS NOT NULL AND (r->>'promotion_update_date') != ''
-                 THEN (r->>'promotion_update_date')::TIMESTAMP ELSE NULL END,
-            CASE WHEN (r->>'promotion_start_date') IS NOT NULL AND (r->>'promotion_start_date') != ''
-                 THEN (r->>'promotion_start_date')::DATE ELSE NULL END,
+            CASE
+              WHEN COALESCE(r->>'promotion_update_date', '') = '' THEN NULL
+              WHEN (r->>'promotion_update_date') ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$'
+                THEN (r->>'promotion_update_date')::TIMESTAMP
+              WHEN (r->>'promotion_update_date') ~ '^\d{2}/\d{2}/\d{4}$'
+                THEN to_timestamp(r->>'promotion_update_date', 'DD/MM/YYYY')
+              WHEN (r->>'promotion_update_date') ~ '^\d{2}/\d{2}/\d{4} \d{2}:\d{2}$'
+                THEN to_timestamp(r->>'promotion_update_date', 'DD/MM/YYYY HH24:MI')
+              WHEN (r->>'promotion_update_date') ~ '^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}$'
+                THEN to_timestamp(r->>'promotion_update_date', 'DD/MM/YYYY HH24:MI:SS')
+              ELSE NULL
+            END,
+            CASE
+              WHEN COALESCE(r->>'promotion_start_date', '') = '' THEN NULL
+              WHEN (r->>'promotion_start_date') ~ '^\d{4}-\d{2}-\d{2}$'
+                THEN (r->>'promotion_start_date')::DATE
+              WHEN (r->>'promotion_start_date') ~ '^\d{2}/\d{2}/\d{4}$'
+                THEN to_date(r->>'promotion_start_date', 'DD/MM/YYYY')
+              WHEN (r->>'promotion_start_date') ~ '^\d{2}-\d{2}-\d{4}$'
+                THEN to_date(r->>'promotion_start_date', 'DD-MM-YYYY')
+              ELSE NULL
+            END,
             r->>'promotion_start_hour',
-            CASE WHEN (r->>'promotion_end_date') IS NOT NULL AND (r->>'promotion_end_date') != ''
-                 THEN (r->>'promotion_end_date')::DATE ELSE NULL END,
+            CASE
+              WHEN COALESCE(r->>'promotion_end_date', '') = '' THEN NULL
+              WHEN (r->>'promotion_end_date') ~ '^\d{4}-\d{2}-\d{2}$'
+                THEN (r->>'promotion_end_date')::DATE
+              WHEN (r->>'promotion_end_date') ~ '^\d{2}/\d{2}/\d{4}$'
+                THEN to_date(r->>'promotion_end_date', 'DD/MM/YYYY')
+              WHEN (r->>'promotion_end_date') ~ '^\d{2}-\d{2}-\d{4}$'
+                THEN to_date(r->>'promotion_end_date', 'DD-MM-YYYY')
+              ELSE NULL
+            END,
             r->>'promotion_end_hour', r->>'promotion_days', r->>'redemption_limit',
             r->>'reward_type', r->>'allow_multiple_discounts',
             COALESCE((r->>'is_weighted_promo')::boolean, false),

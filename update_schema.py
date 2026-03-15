@@ -1,12 +1,66 @@
 import os
 import psycopg2
 
-db_url = os.getenv('SUPABASE_DATABASE_URL')
+db_url = os.getenv('POSTGRESQL_URL') or os.getenv('DATABASE_URL') or os.getenv('SUPABASE_DATABASE_URL')
 
 def update_schema():
+    if not db_url:
+        raise ValueError("POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL) must be set")
+
     conn = psycopg2.connect(db_url)
     conn.autocommit = True
     with conn.cursor() as cur:
+        # Base tables needed by the uploader (must exist on a brand-new DB).
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS stores (
+            id SERIAL PRIMARY KEY,
+            chain_id VARCHAR NOT NULL,
+            chain_name VARCHAR,
+            last_update_date VARCHAR,
+            last_update_time VARCHAR,
+            store_id VARCHAR NOT NULL,
+            bikoret_no VARCHAR,
+            store_type VARCHAR,
+            store_name VARCHAR,
+            address VARCHAR,
+            city VARCHAR,
+            zip_code VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(chain_id, store_id)
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            item_code VARCHAR NOT NULL UNIQUE,
+            item_name VARCHAR,
+            manufacturer_name VARCHAR,
+            manufacture_country VARCHAR,
+            manufacturer_item_description VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS processed_files (
+            id SERIAL PRIMARY KEY,
+            file_name VARCHAR NOT NULL UNIQUE,
+            file_path VARCHAR,
+            file_hash VARCHAR,
+            file_size BIGINT DEFAULT 0,
+            file_type VARCHAR,
+            record_count INTEGER DEFAULT 0,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            chain_id VARCHAR,
+            store_id VARCHAR,
+            store_name VARCHAR,
+            chain_name VARCHAR
+        );
+        """)
+
         cur.execute("DROP TABLE IF EXISTS prices CASCADE;")
         cur.execute("DROP TABLE IF EXISTS promotions CASCADE;")
         
@@ -84,7 +138,9 @@ def update_schema():
         CREATE INDEX idx_promotions_promotion_id ON promotions(promotion_id);
         """)
         
-        cur.execute("TRUNCATE TABLE stores, products, processed_files CASCADE;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_stores_chain_store ON stores(chain_id, store_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_products_item_code ON products(item_code);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_processed_files_file_name ON processed_files(file_name);")
 
         # -------------------------------------------------------------------
         # RPC functions for atomic JSONB merge (called via supabase-py REST)

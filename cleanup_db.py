@@ -1,8 +1,8 @@
 """Safe database cleanup.
 
 Supports two connection modes (tried in order):
-  1. supabase-py REST API  — set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
-  2. psycopg2 direct SQL  — set SUPABASE_DATABASE_URL (fallback, works locally)
+    1. supabase-py REST API  — set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+    2. psycopg2 direct SQL  — set POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL)
 
 RULES (never violated):
 1. Products and stores are NEVER deleted.
@@ -14,7 +14,9 @@ RULES (never violated):
 Environment variables:
   SUPABASE_URL               — Supabase project URL  (REST mode)
   SUPABASE_SERVICE_ROLE_KEY  — Service role key       (REST mode)
-  SUPABASE_DATABASE_URL      — PostgreSQL URL          (direct mode fallback)
+    POSTGRESQL_URL             — PostgreSQL URL          (preferred direct mode)
+    DATABASE_URL               — PostgreSQL URL          (alternate direct mode)
+    SUPABASE_DATABASE_URL      — PostgreSQL URL          (legacy direct mode)
   PRICES_STALE_DAYS          — Override stale-price threshold in days (default 60)
   PROCESSED_FILES_DAYS       — Override processed-file retention in days (default 7)
 """
@@ -40,7 +42,7 @@ class DatabaseCleaner:
 
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
-        db_url = os.getenv("SUPABASE_DATABASE_URL")
+        db_url = os.getenv("POSTGRESQL_URL") or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DATABASE_URL")
 
         if url and key:
             from supabase import create_client
@@ -63,7 +65,7 @@ class DatabaseCleaner:
             print("[i] Connection mode: psycopg2 direct SQL")
         else:
             raise ValueError(
-                "Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY  OR  SUPABASE_DATABASE_URL"
+                "Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY  OR  POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL)"
             )
 
     # ------------------------------------------------------------------
@@ -73,9 +75,9 @@ class DatabaseCleaner:
     def _run_sql(self, sql_count: str, sql_delete: str, params: dict) -> int:
         """Execute a cleanup operation via psycopg2 direct SQL."""
         if self._conn is None:
-            db_url = os.getenv("SUPABASE_DATABASE_URL")
+            db_url = os.getenv("POSTGRESQL_URL") or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DATABASE_URL")
             if not db_url:
-                print("  [!] SUPABASE_DATABASE_URL not set — cannot fall back to direct SQL")
+                print("  [!] POSTGRESQL_URL not set (or DATABASE_URL / SUPABASE_DATABASE_URL) - cannot fall back to direct SQL")
                 return 0
             import psycopg2
             self._conn = psycopg2.connect(db_url, connect_timeout=15)

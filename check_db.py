@@ -2,16 +2,16 @@ import os
 import sys
 import argparse
 from unittest.mock import MagicMock
+import psycopg2
 
 # Mock Logger to avoid dependency issues
 sys.modules['utils'] = MagicMock()
 from remotes.short_term.supabase_db import SupabaseUploader
 
 def check_db_status(clear=False):
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) not set.")
+    db_url = os.getenv("POSTGRESQL_URL") or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DATABASE_URL")
+    if not db_url:
+        print("Error: POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL) not set.")
         return
 
     try:
@@ -22,41 +22,33 @@ def check_db_status(clear=False):
             uploader._clean_all_destinations()
             print("Database cleared.")
 
-        client = uploader.client
+        conn = psycopg2.connect(db_url, connect_timeout=15)
         tables = ["stores", "products", "prices", "promotions", "processed_files"]
         print("Row Counts:")
-        for table in tables:
-            try:
-                result = client.table(table).select("*", count="exact").limit(0).execute()
-                print(f"  {table}: {result.count}")
-            except Exception as e:
-                print(f"  {table}: ERROR ({e})")
+        with conn.cursor() as cur:
+            for table in tables:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    print(f"  {table}: {cur.fetchone()[0]}")
+                except Exception as e:
+                    print(f"  {table}: ERROR ({e})")
 
         print("Detailed Sampling:")
-        try:
-            result = (
-                client.table("products")
-                .select("*", count="exact")
-                .not_.is_("manufacturer_name", "null")
-                .neq("manufacturer_name", "")
-                .limit(0)
-                .execute()
-            )
-            print(f"  Products with manufacturer: {result.count}")
-        except Exception as e:
-            print(f"  Products with manufacturer: ERROR ({e})")
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SELECT COUNT(*) FROM products WHERE manufacturer_name IS NOT NULL AND manufacturer_name <> ''")
+                print(f"  Products with manufacturer: {cur.fetchone()[0]}")
+            except Exception as e:
+                print(f"  Products with manufacturer: ERROR ({e})")
 
-        try:
-            result = (
-                client.table("promotions")
-                .select("*", count="exact")
-                .gt("promotion_start_date", "2020-01-01")
-                .limit(0)
-                .execute()
-            )
-            print(f"  Promotions with start date: {result.count}")
-        except Exception as e:
-            print(f"  Promotions with start date: ERROR ({e})")
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SELECT COUNT(*) FROM promotions WHERE promotion_start_date > '2020-01-01'")
+                print(f"  Promotions with start date: {cur.fetchone()[0]}")
+            except Exception as e:
+                print(f"  Promotions with start date: ERROR ({e})")
+
+        conn.close()
 
     except Exception as e:
         print(f"Connection failed: {e}")

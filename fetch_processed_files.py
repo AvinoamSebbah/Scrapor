@@ -1,4 +1,4 @@
-"""Fetch processed_files from Supabase and save to a local JSON cache.
+"""Fetch processed_files from PostgreSQL and save to a local JSON cache.
 
 Used by W3_upload.yml: one job makes a single connection, saves the list,
 then all 35 sequential upload jobs read from the file — zero extra DB hits.
@@ -10,48 +10,55 @@ import json
 import sys
 import time
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
 _BATCH = 500
 _OUTPUT = "processed_files_cache.json"
 
 
 def main():
-    from supabase import create_client
-
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        print("[✗] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
+    db_url = (
+        os.environ.get("POSTGRESQL_URL")
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("SUPABASE_DATABASE_URL")
+    )
+    if not db_url:
+        print("[✗] POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL) must be set")
         sys.exit(1)
 
-    client = create_client(url, key)
-    try:
-        client.postgrest.session.timeout = 120
-    except Exception:
-        pass
+    conn = psycopg2.connect(db_url, connect_timeout=15, cursor_factory=RealDictCursor)
+    conn.autocommit = True
 
     rows = []
     page = 0
-    while True:
-        for attempt in range(3):
-            try:
-                result = (
-                    client.table("processed_files")
-                    .select("file_name,record_count,chain_name")
-                    .range(page * _BATCH, (page + 1) * _BATCH - 1)
-                    .execute()
-                )
-                break
-            except Exception as e:
-                if attempt == 2:
-                    print(f"[✗] Failed to fetch page {page} after 3 attempts: {e}")
-                    sys.exit(1)
-                print(f"  [!] Page {page} attempt {attempt + 1}/3 failed, retrying: {e}")
-                time.sleep(5)
+    try:
+        while True:
+            for attempt in range(3):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT file_name, record_count, chain_name "
+                            "FROM processed_files "
+                            "ORDER BY file_name "
+                            "LIMIT %s OFFSET %s",
+                            (_BATCH, page * _BATCH),
+                        )
+                        chunk = [dict(row) for row in cur.fetchall()]
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        print(f"[✗] Failed to fetch page {page} after 3 attempts: {e}")
+                        sys.exit(1)
+                    print(f"  [!] Page {page} attempt {attempt + 1}/3 failed, retrying: {e}")
+                    time.sleep(5)
 
-        rows.extend(result.data)
-        if len(result.data) < _BATCH:
-            break
-        page += 1
+            rows.extend(chunk)
+            if len(chunk) < _BATCH:
+                break
+            page += 1
+    finally:
+        conn.close()
 
     with open(_OUTPUT, "w", encoding="utf-8") as f:
         json.dump(rows, f)

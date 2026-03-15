@@ -18,7 +18,7 @@ def output_short_term_destination_from_env(output_destination):
         return MongoDbUploader()
     elif output_destination == "file":
         return DummyDocumentDbUploader("./document_db")
-    elif output_destination == "supabase":
+    elif output_destination in {"supabase", "postgres", "postgresql"}:
         return SupabaseUploader()
     else:
         raise ValueError(f"Invalid output destination: {output_destination}")
@@ -92,7 +92,7 @@ if __name__ == "__main__":
             ],  # make the folder the same name
             dataset_remote_name=os.environ["KAGGLE_DATASET_REMOTE_NAME"],
             when=when if when else now(),
-        ) if os.environ.get("OUTPUT_DESTINATION") != "supabase" else DummyFileStorage(
+        ) if os.environ.get("OUTPUT_DESTINATION") not in {"supabase", "postgres", "postgresql"} else DummyFileStorage(
             dataset_remote_path="dummy",
             dataset_path="dummy",
             when=when if when else now()

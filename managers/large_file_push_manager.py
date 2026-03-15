@@ -97,7 +97,7 @@ class LargeFilePushManager:
                     # DB-driven skip logic
                     if curr_file_name in self.processed_files:
                         if curr_file_name not in skipped_files:
-                            Logger.info(f"Supabase sync: Skipping already processed record-file {curr_file_name}")
+                            Logger.info(f"DB sync: Skipping already processed record-file {curr_file_name}")
                             skipped_files.add(curr_file_name)
                         continue
 

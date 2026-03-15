@@ -1,58 +1,68 @@
-"""Supabase REST API implementation of the database uploader.
+"""PostgreSQL implementation of the short-term database uploader.
 
-Uses the official supabase-py client to communicate via PostgREST — no direct
-PostgreSQL connection required.  Each upload job for a different store runs
-fully in parallel without connection-level contention.
+This module keeps the historic class name ``SupabaseUploader`` to avoid
+changing callers, but all writes/reads are now done through a direct
+PostgreSQL connection.
 """
 
-import os
 import json
 import math
+import os
 import time
 from datetime import datetime
-import httpx
-from supabase import create_client, Client
+
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import Json, RealDictCursor, execute_values
+
 from utils import Logger
 from .api_base import ShortTermDatabaseUploader
 
 _CLEANUP_STORES_SQL = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "cleanup_stores.sql")
 
 
-def _run_stores_cleanup():
-    """Run cleanup_stores.sql via psycopg2 if SUPABASE_DATABASE_URL is set."""
-    db_url = os.getenv("SUPABASE_DATABASE_URL")
+def _resolve_database_url(explicit_url=None):
+    if explicit_url:
+        return explicit_url
+    return (
+        os.getenv("POSTGRESQL_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("SUPABASE_DATABASE_URL")
+    )
+
+
+def _run_stores_cleanup(db_url=None):
+    """Run cleanup_stores.sql if a PostgreSQL URL is configured."""
+    db_url = _resolve_database_url(db_url)
     if not db_url:
         return
     sql_path = os.path.normpath(_CLEANUP_STORES_SQL)
     if not os.path.isfile(sql_path):
-        Logger.warning("cleanup_stores.sql not found at %s — skipping", sql_path)
+        Logger.warning("cleanup_stores.sql not found at %s - skipping", sql_path)
         return
     try:
-        import psycopg2
         with open(sql_path, "r", encoding="utf-8") as f:
-            sql = f.read()
+            cleanup_sql = f.read()
         conn = psycopg2.connect(db_url, connect_timeout=15)
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(cleanup_sql)
         conn.close()
         Logger.info("cleanup_stores.sql executed successfully")
     except Exception as e:
         Logger.warning("cleanup_stores.sql failed: %s", e)
 
-# Batch sizes tuned per table — promotions have ~35 fields so smaller chunks
-_BATCH_SIZE_DEFAULT  = 500
-_BATCH_SIZE_PROMOS   = 50
-_BATCH_SIZE_PRICES   = 50
-# Products are a hot table under concurrent load — smaller batches reduce lock hold time
-_BATCH_SIZE_PRODUCTS = 50
 
-# Timeout in seconds for each individual PostgREST request
-_HTTP_TIMEOUT = 120
+# Batch sizes tuned per table - promotions have many fields so smaller chunks
+_BATCH_SIZE_DEFAULT = 500
+_BATCH_SIZE_PROMOS = 50
+_BATCH_SIZE_PRICES = 50
+# Products are a hot table under concurrent load - smaller batches reduce lock time
+_BATCH_SIZE_PRODUCTS = 50
 
 
 class SupabaseUploader(ShortTermDatabaseUploader):
-    """Supabase REST API implementation for storing and managing supermarket data."""
+    """Direct PostgreSQL implementation for storing supermarket data."""
 
     @staticmethod
     def _get_val(d, key, default=None):
@@ -67,7 +77,6 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     val = v
                     break
 
-        # Handle NaN (often comes from pandas reading empty CSV fields)
         if val is not None:
             try:
                 if isinstance(val, (float, int)) and math.isnan(val):
@@ -90,30 +99,59 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             return s_val[:-2]
         return s_val
 
-    def __init__(self, url=None, key=None):
-        """Initialise the Supabase REST client.
+    @staticmethod
+    def _to_db_value(value):
+        if isinstance(value, (dict, list)):
+            return Json(value)
+        return value
 
-        Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) from
-        the environment when not supplied explicitly.
+    def __init__(self, url=None, key=None, database_url=None):
+        """Initialise PostgreSQL client.
+
+        ``url`` and ``key`` are ignored and kept only for backward
+        compatibility with previous Supabase-based call sites.
         """
-        url = url or os.getenv("SUPABASE_URL")
-        key = key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
-        if not url or not key:
+        del key
+        db_url = database_url
+        if not db_url and isinstance(url, str) and url.startswith("postgresql://"):
+            db_url = url
+        self.db_url = _resolve_database_url(db_url)
+        if not self.db_url:
             raise ValueError(
-                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set"
+                "POSTGRESQL_URL (or DATABASE_URL / SUPABASE_DATABASE_URL) must be set"
             )
-        self.client: Client = create_client(url, key)
-        # Patch the timeout on the underlying httpx session used by postgrest
-        try:
-            self.client.postgrest.session.timeout = _HTTP_TIMEOUT
-        except Exception:
-            pass
+
+        self.conn = None
+        self._ensure_connection()
+
         self.seen_stores: set = set()
         self.seen_products: set = set()
-        # Maps (chain_id, store_id) -> stores.id (DB primary key)
-        # Used so store_prices JSONB keys are globally unique across chains.
         self._store_db_id_cache: dict = {}
-        Logger.info("Supabase REST client initialised (url=%s, timeout=%ds)", url, _HTTP_TIMEOUT)
+        Logger.info("PostgreSQL uploader initialised")
+
+    # ------------------------------------------------------------------
+    # low-level SQL helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_connection(self):
+        if self.conn is not None and self.conn.closed == 0:
+            return
+        self.conn = psycopg2.connect(
+            self.db_url,
+            connect_timeout=15,
+            cursor_factory=RealDictCursor,
+        )
+        self.conn.autocommit = True
+        with self.conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '300s'")
+
+    def _run_query(self, query, params=None, fetch=False):
+        self._ensure_connection()
+        with self.conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetch:
+                return cur.fetchall()
+        return []
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -127,115 +165,143 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         ignore_duplicates: bool = False,
         batch_size: int = _BATCH_SIZE_DEFAULT,
     ) -> None:
-        """Upsert *records* into *table* in safe-sized batches via PostgREST.
-
-        Used for stores, products, processed_files (simple upserts with no JSONB merge).
-        For prices and promotions, use _rpc_batch() instead.
-        """
+        """Upsert ``records`` into ``table`` in safe-sized batches."""
         if not records:
             return
+
+        columns = list(records[0].keys())
+        conflict_columns = [c.strip() for c in on_conflict.split(",") if c.strip()]
+        update_columns = [c for c in columns if c not in conflict_columns and c != "created_at"]
+
+        insert_sql = sql.SQL("INSERT INTO {table} ({cols}) VALUES %s ").format(
+            table=sql.Identifier(table),
+            cols=sql.SQL(",").join(sql.Identifier(col) for col in columns),
+        )
+
+        if ignore_duplicates or not update_columns:
+            conflict_sql = sql.SQL("ON CONFLICT ({conflict}) DO NOTHING").format(
+                conflict=sql.SQL(",").join(sql.Identifier(col) for col in conflict_columns)
+            )
+        else:
+            update_set = sql.SQL(",").join(
+                sql.SQL("{col}=EXCLUDED.{col}").format(col=sql.Identifier(col))
+                for col in update_columns
+            )
+            conflict_sql = sql.SQL("ON CONFLICT ({conflict}) DO UPDATE SET {updates}").format(
+                conflict=sql.SQL(",").join(sql.Identifier(col) for col in conflict_columns),
+                updates=update_set,
+            )
+
+        final_sql = insert_sql + conflict_sql
+
+        waits = [5, 10, 20, 40]
         for i in range(0, len(records), batch_size):
             chunk = records[i : i + batch_size]
-            # 5 attempts with increasing waits — statement timeout (57014) is caused by
-            # concurrent lock contention; we need longer pauses to let competing
-            # transactions finish before retrying.
-            _waits = [5, 10, 20, 40]
+            rows = [tuple(self._to_db_value(rec.get(col)) for col in columns) for rec in chunk]
+
             for attempt in range(5):
                 try:
-                    self.client.table(table).upsert(
-                        chunk,
-                        on_conflict=on_conflict,
-                        ignore_duplicates=ignore_duplicates,
-                    ).execute()
+                    self._ensure_connection()
+                    with self.conn.cursor() as cur:
+                        execute_values(cur, final_sql.as_string(self.conn), rows)
                     break
                 except Exception as e:
                     if attempt == 4:
                         raise
-                    wait = _waits[attempt]
+                    wait = waits[attempt]
                     Logger.warning(
                         "Upsert to %s failed (attempt %d/5), retrying in %ds: %s",
-                        table, attempt + 1, wait, e
+                        table,
+                        attempt + 1,
+                        wait,
+                        e,
                     )
                     time.sleep(wait)
 
     def _rpc_batch(self, func_name: str, records: list) -> None:
-        """Call a Supabase RPC function in batches for atomic server-side JSONB merge.
-
-        merge_prices and merge_promotions run INSERT … ON CONFLICT DO UPDATE with
-        store_prices || EXCLUDED.store_prices directly in PostgreSQL — no race condition.
-        """
+        """Call SQL merge function in batches for atomic server-side JSONB merge."""
         if not records:
             return
         batch_size = _BATCH_SIZE_PROMOS if func_name == "merge_promotions" else _BATCH_SIZE_PRICES
-        _waits = [5, 10, 20, 40]
+        waits = [5, 10, 20, 40]
+
         for i in range(0, len(records), batch_size):
             chunk = records[i : i + batch_size]
+            payload = json.dumps(chunk, ensure_ascii=False)
             for attempt in range(5):
                 try:
-                    self.client.rpc(func_name, {"p_records": chunk}).execute()
+                    self._run_query(
+                        sql.SQL("SELECT {}(%s::jsonb)").format(sql.Identifier(func_name)),
+                        (payload,),
+                        fetch=False,
+                    )
                     break
                 except Exception as e:
                     if attempt == 4:
                         raise
-                    wait = _waits[attempt]
+                    wait = waits[attempt]
                     Logger.warning(
-                        "RPC %s failed (attempt %d/5), retrying in %ds: %s",
-                        func_name, attempt + 1, wait, e
+                        "Function %s failed (attempt %d/5), retrying in %ds: %s",
+                        func_name,
+                        attempt + 1,
+                        wait,
+                        e,
                     )
                     time.sleep(wait)
 
     def _fetch_all_pages(self, table: str, columns: str) -> list:
-        """Fetch every row from *table*, paginating through PostgREST results."""
+        """Fetch every row from ``table`` using LIMIT/OFFSET pagination."""
         all_rows: list = []
         page = 0
+        col_list = [col.strip() for col in columns.split(",") if col.strip()]
         while True:
-            result = (
-                self.client.table(table)
-                .select(columns)
-                .range(page * _BATCH_SIZE_DEFAULT, (page + 1) * _BATCH_SIZE_DEFAULT - 1)
-                .execute()
+            query = sql.SQL("SELECT {cols} FROM {table} ORDER BY 1 LIMIT %s OFFSET %s").format(
+                cols=sql.SQL(",").join(sql.Identifier(col) for col in col_list),
+                table=sql.Identifier(table),
             )
-            all_rows.extend(result.data)
-            if len(result.data) < _BATCH_SIZE_DEFAULT:
+            rows = self._run_query(query, (_BATCH_SIZE_DEFAULT, page * _BATCH_SIZE_DEFAULT), fetch=True)
+            all_rows.extend(rows)
+            if len(rows) < _BATCH_SIZE_DEFAULT:
                 break
             page += 1
-        return all_rows
+        return [dict(row) for row in all_rows]
 
     def _test_connection(self) -> None:
-        """Verify that the REST client can reach the project.
-
-        Uses LIMIT 1 with no count — avoids a full table scan that would
-        trigger a statement timeout on large tables.
-        """
         try:
-            self.client.table("processed_files").select("file_name").limit(1).execute()
-            Logger.info("Supabase REST connection test successful")
+            self._run_query("SELECT 1", fetch=True)
+            Logger.info("PostgreSQL connection test successful")
         except Exception as e:
-            Logger.error("Supabase REST connection test failed: %s", str(e))
+            Logger.error("PostgreSQL connection test failed: %s", str(e))
             raise
 
     def _fetch_existing_jsonb(
-        self, table: str, pk_col: str, id_col: str, jsonb_col: str, arr_col: str,
-        by_pk: dict
+        self,
+        table: str,
+        pk_col: str,
+        id_col: str,
+        jsonb_col: str,
+        arr_col: str,
+        by_pk: dict,
     ) -> dict:
-        """Fetch existing JSONB and array columns for a set of rows grouped by a primary key.
-
-        Returns a dict keyed by (pk_value, id_value) -> {jsonb_col: {...}, arr_col: [...]}
-        """
+        """Fetch existing JSONB/array columns for grouped rows."""
         existing: dict = {}
         for pk_value, id_values in by_pk.items():
             for i in range(0, len(id_values), _BATCH_SIZE_DEFAULT):
                 chunk = id_values[i : i + _BATCH_SIZE_DEFAULT]
                 try:
-                    result = (
-                        self.client.table(table)
-                        .select(f"{id_col},{jsonb_col},{arr_col}")
-                        .eq(pk_col, pk_value)
-                        .in_(id_col, chunk)
-                        .execute()
+                    query = sql.SQL(
+                        "SELECT {id_col},{jsonb_col},{arr_col} FROM {table} "
+                        "WHERE {pk_col}=%s AND {id_col}=ANY(%s)"
+                    ).format(
+                        id_col=sql.Identifier(id_col),
+                        jsonb_col=sql.Identifier(jsonb_col),
+                        arr_col=sql.Identifier(arr_col),
+                        table=sql.Identifier(table),
+                        pk_col=sql.Identifier(pk_col),
                     )
-                    for row in result.data:
-                        existing[(pk_value, row[id_col])] = row
+                    rows = self._run_query(query, (pk_value, chunk), fetch=True)
+                    for row in rows:
+                        existing[(pk_value, row[id_col])] = dict(row)
                 except Exception as e:
                     Logger.warning("Failed to fetch existing %s rows: %s", table, e)
         return existing
@@ -245,11 +311,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _resolve_store_db_ids(self, pairs: set) -> dict:
-        """Return {(chain_id, store_id): stores.id} for all given pairs.
-
-        Checks the in-memory cache first; fetches missing pairs from Supabase.
-        Falls back to using raw store_id as key if the lookup fails.
-        """
+        """Return {(chain_id, store_id): stores.id} for all given pairs."""
         result = {}
         missing_by_chain: dict = {}
         for chain_id, store_id in pairs:
@@ -263,20 +325,17 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             for i in range(0, len(store_ids), 500):
                 chunk = store_ids[i : i + 500]
                 try:
-                    rows = (
-                        self.client.table("stores")
-                        .select("id,store_id")
-                        .eq("chain_id", chain_id)
-                        .in_("store_id", chunk)
-                        .execute()
-                    ).data
+                    rows = self._run_query(
+                        "SELECT id, store_id FROM stores WHERE chain_id=%s AND store_id=ANY(%s)",
+                        (chain_id, chunk),
+                        fetch=True,
+                    )
                     for row in rows:
                         key = (chain_id, str(row["store_id"]))
                         self._store_db_id_cache[key] = row["id"]
                         result[key] = row["id"]
                 except Exception as e:
                     Logger.warning("Failed to resolve store DB ids for chain %s: %s", chain_id, e)
-                    # Fallback: use raw store_id so data is not lost
                     for sid in chunk:
                         result[(chain_id, sid)] = sid
 
@@ -291,14 +350,10 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not items:
             return
 
-        # Check if this is a "file_complete" marker
         if any("file_complete" in item for item in items):
             self._handle_processed_files(items)
             return
 
-        # Check the type of data based on table_target_name.
-        # Must use startswith so chains with "store" in their name
-        # (e.g. KING_STORE → "price_file_king_store") are not mis-routed.
         name_lower = table_target_name.lower()
         if name_lower.startswith("store"):
             self._upsert_stores(items)
@@ -309,7 +364,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         elif "scraperstatus" in name_lower or "parserstatus" in name_lower:
             pass
         else:
-            Logger.warning("Unknown table type for Supabase mapping: %s", table_target_name)
+            Logger.warning("Unknown table type for PostgreSQL mapping: %s", table_target_name)
 
     # ------------------------------------------------------------------
     # processed_files
@@ -326,37 +381,33 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             store_id = self._clean_id(item.get("store_id"))
             store_name = item.get("store_name")
 
-            # If store_name is missing, try to look it up via the REST API
             if not store_name and chain_id and store_id:
                 try:
-                    result = (
-                        self.client.table("stores")
-                        .select("store_name")
-                        .eq("chain_id", chain_id)
-                        .eq("store_id", store_id)
-                        .limit(1)
-                        .execute()
+                    rows = self._run_query(
+                        "SELECT store_name FROM stores WHERE chain_id=%s AND store_id=%s LIMIT 1",
+                        (chain_id, store_id),
+                        fetch=True,
                     )
-                    if result.data:
-                        store_name = result.data[0].get("store_name")
+                    if rows:
+                        store_name = rows[0].get("store_name")
                 except Exception as e:
-                    Logger.warning(
-                        "Failed to lookup store name for %s-%s: %s", chain_id, store_id, e
-                    )
+                    Logger.warning("Failed to lookup store name for %s-%s: %s", chain_id, store_id, e)
 
-            records.append({
-                "file_name": item.get("file_name"),
-                "file_path": "",
-                "file_hash": "",
-                "file_size": 0,
-                "file_type": "",
-                "record_count": item.get("total_expected_records", 0),
-                "processed_at": now,
-                "chain_id": chain_id,
-                "store_id": store_id,
-                "store_name": store_name,
-                "chain_name": item.get("chain_name"),
-            })
+            records.append(
+                {
+                    "file_name": item.get("file_name"),
+                    "file_path": "",
+                    "file_hash": "",
+                    "file_size": 0,
+                    "file_type": "",
+                    "record_count": item.get("total_expected_records", 0),
+                    "processed_at": now,
+                    "chain_id": chain_id,
+                    "store_id": store_id,
+                    "store_name": store_name,
+                    "chain_name": item.get("chain_name"),
+                }
+            )
 
         self._upsert_batch("processed_files", records, on_conflict="file_name")
 
@@ -365,7 +416,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _upsert_stores(self, items):
-        """Map and upsert stores via REST API."""
+        """Map and upsert stores."""
         now = datetime.now().isoformat()
         records_dict: dict = {}
         for item in items:
@@ -396,25 +447,20 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not records_dict:
             return
 
-        Logger.info("Upserting %d stores via Supabase API", len(records_dict))
+        Logger.info("Upserting %d stores via PostgreSQL", len(records_dict))
         self._upsert_batch("stores", list(records_dict.values()), on_conflict="chain_id,store_id")
         self.seen_stores.update(records_dict.keys())
-        _run_stores_cleanup()
+        _run_stores_cleanup(self.db_url)
 
     # ------------------------------------------------------------------
     # prices
     # ------------------------------------------------------------------
 
     def _upsert_prices(self, items):
-        """Map and upsert products and prices via REST API.
-
-        store_prices JSONB keys are stores.id (DB primary key), not raw chain
-        store_id — so keys are globally unique across all chains.
-        """
+        """Map and upsert products and prices."""
         self._ensure_stores_exist(items)
         self._upsert_products(items)
 
-        # Resolve DB primary keys for every (chain_id, store_id) pair touched
         pairs = set()
         for item in items:
             content = item.get("content", {})
@@ -427,6 +473,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         now = datetime.now().isoformat()
         today = datetime.now().strftime("%Y-%m-%d")
         aggregated: dict = {}
+        skipped_missing_required = 0
 
         for item in items:
             content = item.get("content", {})
@@ -435,9 +482,9 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             item_code = self._clean_id(self._get_val(content, "ItemCode"))
 
             if not chain_id or not store_id or not item_code:
+                skipped_missing_required += 1
                 continue
 
-            # Use DB PK as the key so it's globally unique across chains
             db_store_key = str(db_id_map.get((chain_id, store_id), store_id))
             key = (chain_id, item_code)
             item_price = self._get_val(content, "ItemPrice")
@@ -454,10 +501,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     "quantity": self._get_val(content, "Quantity"),
                     "unit_of_measure": self._get_val(content, "UnitOfMeasure"),
                     "b_is_weighted": bool(
-                        self._get_val(
-                            content, "bisweighted",
-                            self._get_val(content, "bIsWeighted", False),
-                        )
+                        self._get_val(content, "bisweighted", self._get_val(content, "bIsWeighted", False))
                     ),
                     "qty_in_package": self._get_val(content, "QtyInPackage"),
                     "price_update_date": (
@@ -477,9 +521,20 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                     aggregated[key]["available_in_store_ids"].append(db_store_key)
 
         if not aggregated:
+            if skipped_missing_required:
+                Logger.warning(
+                    "No valid price rows to merge: skipped %d rows with missing ChainId/StoreId/ItemCode",
+                    skipped_missing_required,
+                )
             return
 
-        Logger.info("Merging %d prices via Supabase RPC (atomic JSONB merge)", len(aggregated))
+        if skipped_missing_required:
+            Logger.warning(
+                "Skipped %d price rows with missing ChainId/StoreId/ItemCode",
+                skipped_missing_required,
+            )
+
+        Logger.info("Merging %d prices via PostgreSQL function", len(aggregated))
         self._rpc_batch("merge_prices", list(aggregated.values()))
 
     # ------------------------------------------------------------------
@@ -487,7 +542,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _upsert_products(self, items):
-        """Upsert product information via REST API."""
+        """Upsert product information."""
         now = datetime.now().isoformat()
         records: dict = {}
         for item in items:
@@ -520,9 +575,11 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not records:
             return
 
-        Logger.info("Upserting %d products via Supabase API", len(records))
+        Logger.info("Upserting %d products via PostgreSQL", len(records))
         self._upsert_batch(
-            "products", list(records.values()), on_conflict="item_code",
+            "products",
+            list(records.values()),
+            on_conflict="item_code",
             batch_size=_BATCH_SIZE_PRODUCTS,
         )
         self.seen_products.update(records.keys())
@@ -532,14 +589,9 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _upsert_promos(self, items):
-        """Map and upsert promotions via REST API.
-
-        store_promotions JSONB keys are stores.id (DB primary key), not raw
-        chain store_id — so keys are globally unique across all chains.
-        """
+        """Map and upsert promotions."""
         self._ensure_stores_exist(items)
 
-        # Resolve DB primary keys for every (chain_id, store_id) pair touched
         pairs = set()
         for item in items:
             content = item.get("content", {})
@@ -562,7 +614,6 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             if not chain_id or not store_id or not promotion_id:
                 continue
 
-            # Use DB PK as the key so it's globally unique across chains
             db_store_key = str(db_id_map.get((chain_id, store_id), store_id))
             key = (chain_id, promotion_id)
             store_promo_val = (
@@ -573,11 +624,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             )
 
             if key not in aggregated:
-                promotion_items = (
-                    self._get_val(content, "groups")
-                    or self._get_val(content, "PromotionItems")
-                    or []
-                )
+                promotion_items = self._get_val(content, "groups") or self._get_val(content, "PromotionItems") or []
                 if isinstance(promotion_items, str):
                     try:
                         json_str = promotion_items.replace("'", '"').replace("None", "null")
@@ -643,7 +690,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         if not aggregated:
             return
 
-        Logger.info("Merging %d promotions via Supabase RPC (atomic JSONB merge)", len(aggregated))
+        Logger.info("Merging %d promotions via PostgreSQL function", len(aggregated))
         self._rpc_batch("merge_promotions", list(aggregated.values()))
 
     # ------------------------------------------------------------------
@@ -651,7 +698,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _ensure_stores_exist(self, items):
-        """Insert minimal store rows so FK constraints don't fire on price/promo upserts."""
+        """Insert minimal store rows so FK constraints do not fail on price/promo upserts."""
         now = datetime.now().isoformat()
         records: list = []
         seen: set = set()
@@ -667,21 +714,19 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                 seen.add(key)
 
         if records:
-            Logger.info("Ensuring %d referenced stores exist via Supabase API", len(records))
+            Logger.info("Ensuring %d referenced stores exist via PostgreSQL", len(records))
             self._upsert_batch("stores", records, on_conflict="chain_id,store_id", ignore_duplicates=True)
             self.seen_stores.update(seen)
-            # Eagerly populate the db-id cache for these stores
             self._resolve_store_db_ids(seen)
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
-    def restart_database(
-        self, enabled_scrapers: list[str], enabled_file_types: list[str]
-    ):
-        """Supabase uses persistent storage — skip the wipe, just verify connectivity."""
-        Logger.info("Supabase persistence mode: skipping database wipe on restart.")
+    def restart_database(self, enabled_scrapers: list[str], enabled_file_types: list[str]):
+        """PostgreSQL persistence mode: skip wipe, verify connectivity only."""
+        del enabled_scrapers, enabled_file_types
+        Logger.info("PostgreSQL persistence mode: skipping database wipe on restart.")
         self._test_connection()
 
     # ------------------------------------------------------------------
@@ -689,12 +734,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def sync_cache(self, local_cache):
-        """Sync remote database state to the local cache.
-
-        If PROCESSED_FILES_CACHE env var points to a pre-fetched JSON produced
-        by fetch_processed_files.py, load from that file instead of hitting
-        Supabase again.  Falls back to the REST API if the file is absent.
-        """
+        """Sync remote database state to the local cache."""
         cache_file = os.getenv("PROCESSED_FILES_CACHE")
         if cache_file and os.path.exists(cache_file):
             Logger.info("Loading processed_files from pre-fetched cache: %s", cache_file)
@@ -709,9 +749,9 @@ class SupabaseUploader(ShortTermDatabaseUploader):
                 Logger.info("Local cache loaded from file with %d files.", len(rows))
                 return
             except Exception as e:
-                Logger.warning("Failed to load cache file, falling back to Supabase: %s", e)
+                Logger.warning("Failed to load cache file, falling back to PostgreSQL: %s", e)
 
-        Logger.info("Syncing local cache from Supabase 'processed_files' table...")
+        Logger.info("Syncing local cache from PostgreSQL table processed_files...")
         try:
             rows = self._fetch_all_pages("processed_files", "file_name,record_count")
             for row in rows:
@@ -721,10 +761,10 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             self.seen_products = set()
             Logger.info("Local cache synced successfully with %d files.", len(rows))
         except Exception as e:
-            Logger.warning("Failed to sync cache from Supabase: %s", str(e))
+            Logger.warning("Failed to sync cache from PostgreSQL: %s", str(e))
 
     def get_processed_files_names(self):
-        """Get the set of processed filenames — from cache file if available."""
+        """Get the set of processed filenames - from cache file if available."""
         cache_file = os.getenv("PROCESSED_FILES_CACHE")
         if cache_file and os.path.exists(cache_file):
             try:
@@ -737,11 +777,11 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             rows = self._fetch_all_pages("processed_files", "file_name")
             return {row["file_name"] for row in rows}
         except Exception as e:
-            Logger.warning("Failed to fetch processed files from Supabase: %s", str(e))
+            Logger.warning("Failed to fetch processed files from PostgreSQL: %s", str(e))
             return set()
 
     def get_processed_files_metadata(self):
-        """Get metadata (file_name, chain_name) — from cache file if available."""
+        """Get metadata (file_name, chain_name) - from cache file if available."""
         cache_file = os.getenv("PROCESSED_FILES_CACHE")
         if cache_file and os.path.exists(cache_file):
             try:
@@ -754,7 +794,7 @@ class SupabaseUploader(ShortTermDatabaseUploader):
             rows = self._fetch_all_pages("processed_files", "file_name,chain_name")
             return [{"file_name": row["file_name"], "chain_name": row.get("chain_name")} for row in rows]
         except Exception as e:
-            Logger.warning("Failed to fetch processed files metadata from Supabase: %s", str(e))
+            Logger.warning("Failed to fetch processed files metadata from PostgreSQL: %s", str(e))
             return []
 
     # ------------------------------------------------------------------
@@ -762,32 +802,27 @@ class SupabaseUploader(ShortTermDatabaseUploader):
     # ------------------------------------------------------------------
 
     def _clean_all_destinations(self):
-        """Delete every row from all managed tables via REST API."""
-        for table, col in [
-            ("processed_files", "file_name"),
-            ("promotions", "chain_id"),
-            ("prices", "chain_id"),
-            ("products", "item_code"),
-            ("stores", "chain_id"),
-        ]:
+        """Delete every row from all managed tables."""
+        for table in ["processed_files", "promotions", "prices", "products", "stores"]:
             Logger.info("Clearing table %s...", table)
-            self.client.table(table).delete().not_.is_(col, "null").execute()
-        Logger.info("Supabase tables cleared via REST API.")
+            self._run_query(sql.SQL("DELETE FROM {}") .format(sql.Identifier(table)))
+        Logger.info("PostgreSQL tables cleared.")
 
     def _is_collection_updated(self, collection_name: str, seconds: int = 10800) -> bool:
         """Check if any data was updated recently."""
+        del collection_name
         try:
-            result = (
-                self.client.table("processed_files")
-                .select("processed_at")
-                .order("processed_at", desc=True)
-                .limit(1)
-                .execute()
+            rows = self._run_query(
+                "SELECT processed_at FROM processed_files ORDER BY processed_at DESC LIMIT 1",
+                fetch=True,
             )
-            if not result.data:
+            if not rows:
                 return False
-            last_update_str = result.data[0]["processed_at"]
-            last_update = datetime.fromisoformat(last_update_str.replace("Z", "+00:00"))
+            last_update = rows[0].get("processed_at")
+            if not last_update:
+                return False
+            if isinstance(last_update, str):
+                last_update = datetime.fromisoformat(last_update.replace("Z", "+00:00"))
             if last_update.tzinfo is not None:
                 last_update = last_update.replace(tzinfo=None)
             return (datetime.now() - last_update).total_seconds() < seconds
@@ -798,6 +833,13 @@ class SupabaseUploader(ShortTermDatabaseUploader):
         return ["stores", "products", "prices", "promotions", "processed_files"]
 
     def get_destinations_content(self, table_name, filter=None):
-        # Implementation for retrieval if needed (e.g. for AccessLayer)
-        # This would require translating Mongo filters to SQL
-        return []
+        del filter
+        try:
+            rows = self._run_query(
+                sql.SQL("SELECT * FROM {} LIMIT 200").format(sql.Identifier(table_name)),
+                fetch=True,
+            )
+            return [dict(row) for row in rows]
+        except Exception as e:
+            Logger.warning("Failed to fetch destination content for %s: %s", table_name, e)
+            return []

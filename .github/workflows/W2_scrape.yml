@@ -3,9 +3,9 @@ name: "W2 · Scrape"
 # Triggered by W1_cleanup.yml or manually.
 #
 # CONNECTION GUARANTEE:
-#   Job 1 – fetch-processed-files: ONE Supabase connection → saves processed_files_cache.json
+#   Job 1 - fetch-processed-files: ONE PostgreSQL connection -> saves processed_files_cache.json
 #   Jobs 2-36 – scrape (35 parallel): resolve the cache from the JSON file,
-#     zero Supabase connections during the actual scraping.
+#     zero PostgreSQL connections during the actual scraping.
 # When every scrape job finishes, trigger-upload fans-in and fires W3.
 
 # Only one pipeline (W1/W2/W3) can run at a time.
@@ -31,7 +31,7 @@ on:
 
 jobs:
   # --------------------------------------------------------------------------
-  # ONE connection to fetch processed_files — closes immediately after.
+  # ONE connection to fetch processed_files - closes immediately after.
   # --------------------------------------------------------------------------
   fetch-processed-files:
     name: "Fetch processed files (1 DB connection)"
@@ -47,10 +47,9 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Fetch processed_files from Supabase
+      - name: Fetch processed_files from PostgreSQL
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
         run: python fetch_processed_files.py
 
       - name: Upload cache artifact
@@ -138,10 +137,9 @@ jobs:
       - name: Scrape, Convert, Clean
         if: steps.check.outputs.enabled == 'true'
         env:
-          OUTPUT_DESTINATION: supabase
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          PROCESSED_FILES_CACHE: ./processed_files_cache.json  # avoids 35 parallel Supabase queries
+          OUTPUT_DESTINATION: postgres
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json  # avoids 35 parallel PostgreSQL queries
           OPERATION: scraping,converting,clean_dump_files
           ENABLED_SCRAPERS: ${{ matrix.store }}
           ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}

@@ -1,0 +1,13 @@
+{
+  "stores": 23,
+  "products": 10150,
+  "product_prices": 164398,
+  "promotions": 1774,
+  "promotion_store_items": 67759,
+  "processed_files": 316,
+  "PROMO_FILE": 71,
+  "PRICE_FULL_FILE": 69,
+  "STORE_FILE": 1,
+  "PRICE_FILE": 106,
+  "PROMO_FULL_FILE": 69
+}

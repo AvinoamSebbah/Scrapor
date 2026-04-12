@@ -1,0 +1,125 @@
+name: "W3 · Upload to PostgreSQL"
+
+# Triggered by W2_scrape.yml after a specific store scrape job finishes.
+#
+# CONNECTION GUARANTEE:
+#   Each W3 run handles exactly one store upload.
+#   processed_files_cache.json is fetched from upstream W2 artifact (no DB read in W3).
+
+# Prevent duplicate uploads for the same store while allowing other stores to upload immediately.
+concurrency:
+  group: supermarket-upload-${{ inputs.store }}
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      scrape_run_id:
+        description: 'Run ID of W2_scrape.yml that produced the artifacts'
+        required: true
+        type: string
+      store:
+        description: 'Store to upload'
+        required: true
+        type: string
+
+jobs:
+  # postgres_preflight job disabled to skip low-level test
+  # postgres_preflight:
+  #   name: "PostgreSQL low-level preflight"
+  #   uses: ./.github/workflows/W4_postgres_low_level_tests.yml
+  #   with:
+  #     destructive_wipe: "NO"
+  #   secrets: inherit
+
+  upload:
+    name: "Upload ${{ inputs.store }} -> PostgreSQL"
+    # needs: postgres_preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read    # needed to download artifacts from scrape_run_id
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Download scrape artifact
+        # continue-on-error: this store may have had no new files to scrape
+        id: download_scrape
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: outputs-${{ inputs.store }}
+          run-id: ${{ inputs.scrape_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./app_data/
+
+      - name: Check if store was scraped
+        id: check_scraped
+        run: |
+          if [ "${{ steps.download_scrape.outcome }}" = "success" ] && [ -n "$(find ./app_data -type f 2>/dev/null | head -1)" ]; then
+            echo "has_data=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_data=false" >> $GITHUB_OUTPUT
+            echo "No artifact for ${{ inputs.store }} - skipping upload"
+          fi
+
+      - name: Download processed-files cache (from W0)
+        if: steps.check_scraped.outputs.has_data == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-files-cache-w2
+          run-id: ${{ inputs.scrape_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./
+
+      - name: Restore folder structure
+        if: steps.check_scraped.outputs.has_data == 'true'
+        run: |
+          mkdir -p ./app_data/dumps/status
+          if [ -d ./app_data/status ]; then
+            mv ./app_data/status/* ./app_data/dumps/status/ 2>/dev/null || true
+          fi
+
+      - name: Upload to PostgreSQL (attempt 1)
+        id: upload_attempt_1
+        continue-on-error: true
+        if: steps.check_scraped.outputs.has_data == 'true'
+        env:
+          OUTPUT_DESTINATION: postgres
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
+          OPERATION: api_update
+          ENABLED_SCRAPERS: ${{ inputs.store }}
+          APP_DATA_PATH: ./app_data
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+          # Pre-fetched file → sync_cache() and get_processed_files_names()
+          # read from this file instead of querying PostgreSQL again.
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json
+        run: python main.py
+
+      - name: Wait 10 minutes before retry
+        if: steps.check_scraped.outputs.has_data == 'true' && steps.upload_attempt_1.outcome == 'failure'
+        run: sleep 600
+
+      - name: Upload to PostgreSQL (attempt 2)
+        if: steps.check_scraped.outputs.has_data == 'true' && steps.upload_attempt_1.outcome == 'failure'
+        env:
+          OUTPUT_DESTINATION: postgres
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
+          OPERATION: api_update
+          ENABLED_SCRAPERS: ${{ inputs.store }}
+          APP_DATA_PATH: ./app_data
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json
+        run: python main.py

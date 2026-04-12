@@ -1,0 +1,74 @@
+name: "W4 · PostgreSQL Low-Level Tests"
+
+# Kept valid to satisfy GitHub Actions workflow parsing.
+# Tests are disabled by default and only run when explicitly requested.
+
+on:
+  workflow_call:
+    inputs:
+      run_tests:
+        description: "Set true to execute low-level DB tests"
+        required: false
+        default: false
+        type: boolean
+      destructive_wipe:
+        description: "Type YES to wipe DB before tests"
+        required: false
+        default: "NO"
+        type: string
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Set true to execute low-level DB tests"
+        required: false
+        default: false
+        type: boolean
+      destructive_wipe:
+        description: "Type YES to wipe DB before tests"
+        required: false
+        default: "NO"
+        type: string
+
+jobs:
+  low-level-tests:
+    if: ${{ inputs.run_tests == true || github.event.inputs.run_tests == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Optional destructive wipe
+        if: ${{ inputs.destructive_wipe == 'YES' || github.event.inputs.destructive_wipe == 'YES' }}
+        run: |
+          printf 'yes\n' | python wipe_db.py --execute
+
+      - name: Apply schema and SQL functions
+        run: |
+          python update_schema.py
+          python update_functions.py
+
+      - name: Run PostgreSQL smoke test
+        run: python smoke_test_postgres.py
+
+      - name: Run migration script (compatibility check)
+        run: python scripts/migrate_prices_json_to_product_prices.py --batch-size 2000
+
+  disabled-placeholder:
+    if: ${{ !(inputs.run_tests == true || github.event.inputs.run_tests == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: W4 is disabled by default
+        run: echo "W4 parsed successfully and is disabled by default. Set run_tests=true to execute."

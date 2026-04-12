@@ -1,0 +1,60 @@
+=== 1. Cache top_promotions_cache (tous windows/scopes) ===
+  window=24h  scope=chain   city=0.0                     784 lignes
+  window=24h  scope=chain   city=1015.0                  128 lignes
+  window=24h  scope=chain   city=1031.0                  142 lignes
+  window=24h  scope=chain   city=1034.0                  118 lignes
+  window=24h  scope=chain   city=1061.0                  72 lignes
+  window=24h  scope=chain   city=1200.0                  148 lignes
+  window=24h  scope=chain   city=1247.0                  49 lignes
+  window=24h  scope=chain   city=1262.0                  52 lignes
+  window=24h  scope=chain   city=1345.0                  57 lignes
+  window=24h  scope=chain   city=139.0                   200 lignes
+  window=24h  scope=chain   city=154.0                   66 lignes
+  window=24h  scope=chain   city=158.0                   134 lignes
+  window=24h  scope=chain   city=171.0                   129 lignes
+  window=24h  scope=chain   city=194.0                   133 lignes
+  window=24h  scope=chain   city=195.0                   142 lignes
+  window=24h  scope=chain   city=2006.0                  153 lignes
+  window=24h  scope=chain   city=2015.0                  135 lignes
+  window=24h  scope=chain   city=2023.0                  54 lignes
+  window=24h  scope=chain   city=2061.0                  43 lignes
+  window=24h  scope=chain   city=2100.0                  65 lignes
+  window=24h  scope=chain   city=241.0                   51 lignes
+  window=24h  scope=chain   city=246.0                   128 lignes
+  window=24h  scope=chain   city=250.0                   57 lignes
+  window=24h  scope=chain   city=2500.0                  138 lignes
+  window=24h  scope=chain   city=2560.0                  50 lignes
+  window=24h  scope=chain   city=2600.0                  144 lignes
+  window=24h  scope=chain   city=2610.0                  375 lignes
+  window=24h  scope=chain   city=2620.0                  160 lignes
+  window=24h  scope=chain   city=2630.0                  200 lignes
+  window=24h  scope=chain   city=2640.0                  200 lignes
+
+=== 2. Recency de promotion_store_items ===
+  last 24h=6034484   last 7d=6034484   last 30d=9448365   total=9448365
+
+=== 3. Distribution par semaine (promotion_store_items actifs) ===
+  week=2026-04-06   6034484 lignes
+  week=2026-03-30   3495919 lignes
+
+=== 4. Top villes dans `stores` ===
+  city=תל אביב                    185 magasins
+  city=ירושלים                    134 magasins
+  city=חיפה                       73 magasins
+  city=באר שבע                    52 magasins
+  city=unknown                    50 magasins
+  city=0.0                        49 magasins
+  city=ראשון לציון                49 magasins
+  city=פתח תקווה                  45 magasins
+  city=נתניה                      39 magasins
+  city=אשדוד                      39 magasins
+  city=חולון                      38 magasins
+  city=בני ברק                    33 magasins
+  city=רמת גן                     33 magasins
+  city=אשקלון                     31 magasins
+  city=כפר סבא                    30 magasins
+
+=== 5. Promotions sans correspondance product_prices (bloquant pour le cache) ===
+  Promos actives SANS product_price matching: 5,382,759
+
+Done.

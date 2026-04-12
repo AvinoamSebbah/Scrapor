@@ -1,0 +1,22 @@
+{
+    "build": { 
+      "dockerfile": "../Dockerfile",
+      "target":"dev",
+      "args": {
+        "PY_VERSION":"3.11.0"
+        }
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/app_data,target=/usr/src/app/app_data,type=bind"
+  ],
+  "customizations": {
+      "vscode": {
+        "extensions": [
+          "ms-python.python",
+          "ms-python.vscode-pylance",
+          "ms-toolsai.jupyter",
+          "littlefoxteam.vscode-python-test-adapter"
+        ]
+      }
+    }
+  }       

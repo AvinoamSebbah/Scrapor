@@ -1,0 +1,71 @@
+name: "W0 · Fetch Processed Files"
+
+# Runs once per pipeline to fetch processed_files cache, then triggers W2.
+
+concurrency:
+  group: supermarket-pipeline
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled_scrapers:
+        description: 'Stores to scrape (comma-separated, empty = all). Ex: SHUFERSAL,VICTORY'
+        required: false
+        default: ''
+      enabled_file_types:
+        description: 'File types (comma-separated, empty = all). Ex: PRICE_FILE,STORE_FILE'
+        required: false
+        default: ''
+      limit:
+        description: 'Max files per store (empty = unlimited)'
+        required: false
+        default: ''
+
+jobs:
+  fetch-processed-files:
+    name: "Fetch processed files (single DB connection)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch processed_files from PostgreSQL
+        env:
+          PYTHONUNBUFFERED: '1'
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: python fetch_processed_files.py
+
+      - name: Upload cache artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-files-cache-w0
+          path: processed_files_cache.json
+          retention-days: 1
+
+  trigger-scrape:
+    name: "Trigger W2 – Scrape"
+    needs: fetch-processed-files
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Start W2_scrape
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run W2_scrape.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }} \
+            -f fetch_run_id=${{ github.run_id }} \
+            -f enabled_scrapers='${{ inputs.enabled_scrapers }}' \
+            -f enabled_file_types='${{ inputs.enabled_file_types }}' \
+            -f limit='${{ inputs.limit }}'

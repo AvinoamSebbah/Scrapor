@@ -1,0 +1,217 @@
+name: "W2 · Scrape"
+
+# Triggered by W1_cleanup.yml or manually.
+#
+# CONNECTION GUARANTEE:
+#   Job 1 - prepare-processed-files-cache: reuses upstream cache artifact,
+#     and only performs one PostgreSQL fetch for manual fallback runs.
+#   Jobs 2-36 – scrape (35 parallel): NO database connection whatsoever.
+#     Output goes to local files; W3 handles all PostgreSQL writes.
+# Each store job dispatches its own W3 upload workflow as soon as it finishes.
+
+# Only one pipeline (W1/W2/W3) can run at a time.
+concurrency:
+  group: supermarket-pipeline
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      fetch_run_id:
+        description: 'Run ID of W0_fetch.yml that produced processed-files-cache-w0 (mandatory)'
+        required: true
+      enabled_scrapers:
+        description: 'Stores to scrape (comma-separated, empty = all). Ex: SHUFERSAL,VICTORY'
+        required: false
+        default: ''
+      enabled_file_types:
+        description: 'File types (comma-separated, empty = all). Ex: PRICE_FILE,STORE_FILE'
+        required: false
+        default: ''
+      limit:
+        description: 'Max files per store (empty = unlimited)'
+        required: false
+        default: ''
+
+jobs:
+  # --------------------------------------------------------------------------
+  # W2 requires the W0 cache artifact and never opens a DB connection.
+  # --------------------------------------------------------------------------
+  prepare-processed-files-cache:
+    name: "Prepare processed files cache"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Validate W0 run id is provided
+        if: inputs.fetch_run_id == ''
+        run: |
+          echo "fetch_run_id is required. Start W0_fetch.yml first, then trigger W2 with that run id."
+          exit 1
+
+      - name: Download cache artifact from W0
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-files-cache-w0
+          run-id: ${{ inputs.fetch_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./
+
+      - name: Upload cache artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-files-cache-w2
+          path: processed_files_cache.json
+          retention-days: 1
+
+  scrape:
+    name: "${{ matrix.store }}"
+    needs: prepare-processed-files-cache
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      max-parallel: 10       # Scraping is HTTP-only; W3 dispatch is gated separately
+      matrix:
+        store:
+          - BAREKET
+          - YAYNO_BITAN_AND_CARREFOUR
+          - COFIX
+          - CITY_MARKET_KIRYATGAT
+          - CITY_MARKET_SHOPS
+          - DOR_ALON
+          - GOOD_PHARM
+          - HAZI_HINAM
+          - HET_COHEN
+          - KESHET
+          - KING_STORE
+          - MAAYAN_2000
+          - MAHSANI_ASHUK
+          - NETIV_HASED
+          - MESHMAT_YOSEF_1
+          - MESHMAT_YOSEF_2
+          - OSHER_AD
+          - POLIZER
+          - RAMI_LEVY
+          - SALACH_DABACH
+          - SHEFA_BARCART_ASHEM
+          - SHUFERSAL
+          - SHUK_AHIR
+          - STOP_MARKET
+          - SUPER_PHARM
+          - SUPER_YUDA
+          - SUPER_SAPIR
+          - FRESH_MARKET_AND_SUPER_DOSH
+          - QUIK
+          - TIV_TAAM
+          - VICTORY
+          - YELLOW
+          - YOHANANOF
+          - ZOL_VEBEGADOL
+          - WOLT
+
+    steps:
+      - name: Check if this store is requested
+        id: check
+        run: |
+          REQUESTED="${{ inputs.enabled_scrapers }}"
+          if [ -z "$REQUESTED" ] || echo ",$REQUESTED," | grep -q ",${{ matrix.store }},"; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.enabled == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        if: steps.check.outputs.enabled == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Download processed-files cache
+        if: steps.check.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-files-cache-w2
+
+      - name: Scrape, Convert, Clean
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          OUTPUT_DESTINATION: file
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json  # avoids 35 parallel PostgreSQL queries
+          OPERATION: scraping,converting,clean_dump_files
+          ENABLED_SCRAPERS: ${{ matrix.store }}
+          ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}
+          LIMIT: ${{ inputs.limit }}
+          APP_DATA_PATH: ./app_data
+          PYTHONUNBUFFERED: '1'
+          LOG_LEVEL: WARNING
+          TZ: Asia/Jerusalem
+        run: python main.py
+
+      - name: Check if scrape produced upload data
+        if: steps.check.outputs.enabled == 'true'
+        id: has_upload_data
+        run: |
+          if [ -n "$(find ./app_data/outputs -type f 2>/dev/null | head -1)" ]; then
+            echo "has_data=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_data=false" >> $GITHUB_OUTPUT
+            echo "No upload data for ${{ matrix.store }} - skipping W3 trigger"
+          fi
+
+      - name: Upload outputs artifact
+        if: steps.check.outputs.enabled == 'true' && steps.has_upload_data.outputs.has_data == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: outputs-${{ matrix.store }}
+          path: |
+            ./app_data/outputs/
+            ./app_data/dumps/status/
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Trigger W3 for this store
+        if: success() && steps.check.outputs.enabled == 'true' && steps.has_upload_data.outputs.has_data == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          W3_MAX_IN_FLIGHT: '4'
+        run: |
+          # Hard cap W3 concurrency: wait until active W3 runs are below threshold.
+          while true; do
+            IN_FLIGHT=$(gh run list \
+              --repo ${{ github.repository }} \
+              --workflow W3_upload.yml \
+              --limit 100 \
+              --json status \
+              --jq '[.[] | select(.status == "in_progress")] | length')
+
+            if [ "$IN_FLIGHT" -lt "$W3_MAX_IN_FLIGHT" ]; then
+              break
+            fi
+
+            echo "W3 in-flight=$IN_FLIGHT (limit=$W3_MAX_IN_FLIGHT). Waiting 30s before dispatch..."
+            sleep 30
+          done
+
+          gh workflow run W3_upload.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }} \
+            -f scrape_run_id=${{ github.run_id }} \
+            -f store=${{ matrix.store }}

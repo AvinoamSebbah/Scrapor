@@ -1,0 +1,109 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: raw-data-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - mongo-network
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '3'
+          memory: 4G
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: raw-data-api
+    ports:
+      - "8080:8000"
+    depends_on:
+      - mongodb
+    environment:
+      - MONGODB_URI=mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@${MONGO_URL}:${MONGO_PORT}/
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - KAGGLE_KEY=${KAGGLE_KEY}
+      - KAGGLE_USERNAME=${KAGGLE_USERNAME}
+      - KAGGLE_DATASET_REMOTE_NAME=${KAGGLE_DATASET_REMOTE_NAME}
+      - APP_DATA_PATH=app_data
+      - ENABLED_SCRAPERS=${ENABLED_SCRAPERS}
+      - ENABLED_FILE_TYPES=${ENABLED_FILE_TYPES}
+      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
+      - API_TOKEN=${API_TOKEN}
+    networks:
+      - mongo-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "response=$$(curl -s -X GET http://localhost:8000/service_health -H 'accept: application/json') && echo \"$$response\" | grep -q '\"status\":\"healthy\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  data_processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: data_processing
+    container_name: data-fetcher
+    depends_on:
+      - mongodb
+    environment:
+      - MONGODB_URI=mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@${MONGO_URL}:${MONGO_PORT}/
+      - OPERATION=${OPERATION}
+      - KAGGLE_KEY=${KAGGLE_KEY}
+      - KAGGLE_USERNAME=${KAGGLE_USERNAME}
+      - KAGGLE_DATASET_REMOTE_NAME=${KAGGLE_DATASET_REMOTE_NAME}
+      - APP_DATA_PATH=app_data
+      - LIMIT=${LIMIT}
+      - ENABLED_SCRAPERS=${ENABLED_SCRAPERS}
+      - ENABLED_FILE_TYPES=${ENABLED_FILE_TYPES}
+      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
+      - OUTPUT_DESTINATION=mongo
+      - STOP_DAG_CONDITION=${STOP_DAG_CONDITION}
+      - EXEC_FINAL_OPERATIONS_CONDITION=${EXEC_FINAL_OPERATIONS_CONDITION}
+      - SECOND_TO_WAIT_AFTER_FINAL_OPERATIONS=${SECOND_TO_WAIT_AFTER_FINAL_OPERATIONS}
+      - SECOND_TO_WAIT_BETWEEN_OPERATIONS=${SECOND_TO_WAIT_BETWEEN_OPERATIONS}
+      - HEALTHCHECK_MAX_AGE_SECONDS=${HEALTHCHECK_MAX_AGE_SECONDS:-300}
+    volumes:
+      - app_data:/usr/src/app/app_data
+    networks:
+      - mongo-network
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 2
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+volumes:
+  mongo-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${MONGO_DATA_PATH}"
+  app_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind 
+      device: "${APP_DATA_PATH}"
+
+networks:
+  mongo-network:
+    driver: bridge

@@ -241,7 +241,8 @@ def update_schema():
         ALTER TABLE top_promotions_cache
           ADD COLUMN IF NOT EXISTS unit_of_measure VARCHAR,
           ADD COLUMN IF NOT EXISTS unit_qty VARCHAR,
-          ADD COLUMN IF NOT EXISTS b_is_weighted BOOLEAN DEFAULT false;
+          ADD COLUMN IF NOT EXISTS b_is_weighted BOOLEAN DEFAULT false,
+          ADD COLUMN IF NOT EXISTS has_image BOOLEAN DEFAULT NULL;
         """)
 
         cur.execute("""

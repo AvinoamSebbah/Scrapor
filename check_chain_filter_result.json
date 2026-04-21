@@ -1,0 +1,289 @@
+{
+  "chain_filter_query_result": [
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "BE"
+    },
+    {
+      "chain_id": "7290492000005",
+      "chain_name": "Dor Alon"
+    },
+    {
+      "chain_id": "7290103152017",
+      "chain_name": "אושר עד"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "גוד מרקט"
+    },
+    {
+      "chain_id": "7290058159628",
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ"
+    },
+    {
+      "chain_id": "7290058249350",
+      "chain_name": "וולט מרקט"
+    },
+    {
+      "chain_id": "7290058173198",
+      "chain_name": "זול ובגדול בע\"מ"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד"
+    },
+    {
+      "chain_id": "7290803800003",
+      "chain_name": "מ. יוחננוף ובניו"
+    },
+    {
+      "chain_id": "7290058160839",
+      "chain_name": "נתיב החסד- סופר חסד בע\"מ"
+    },
+    {
+      "chain_id": "7290058177776",
+      "chain_name": "סופר יודה"
+    },
+    {
+      "chain_id": "7290058156016",
+      "chain_name": "סופר ספיר בע\"מ"
+    },
+    {
+      "chain_id": "7290644700005",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ"
+    },
+    {
+      "chain_id": "7290058140886",
+      "chain_name": "רמי לוי שיווק השקמה"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "שופרסל"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "שופרסל אקספרס"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "שופרסל דיל"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "שופרסל שלי"
+    },
+    {
+      "chain_id": "7290058134977",
+      "chain_name": "שפע ברכת השם בע\"מ"
+    }
+  ],
+  "yesh_hesed_in_store_filter": [
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד",
+      "store_id": "364",
+      "store_name": "יש חסד בית וגן",
+      "city": "ירושלים"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד",
+      "store_id": "608",
+      "store_name": "יש חסד ירושלים-קרית שאול",
+      "city": "ירושלים"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד",
+      "store_id": "610",
+      "store_name": "יש חסד ירושלים- רמת שלמה",
+      "city": "ירושלים"
+    },
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד",
+      "store_id": "496",
+      "store_name": "יש חסד כנפי נשרים",
+      "city": "ירושלים"
+    }
+  ],
+  "yesh_hesed_chain_ids": [
+    {
+      "chain_id": "7290027600007",
+      "chain_name": "יש חסד"
+    }
+  ],
+  "get_offers_for_item_code_def": "CREATE OR REPLACE FUNCTION public.get_offers_for_item_code(p_item_code text, p_city text DEFAULT NULL::text, p_chain_id text DEFAULT NULL::text, p_limit integer DEFAULT 300, p_offset integer DEFAULT 0)\n RETURNS TABLE(item_code text, item_name text, manufacturer_name text, chain_id text, store_id text, store_name text, city text, price numeric, promo_price numeric, effective_price numeric, unit_of_measure text, unit_qty text, b_is_weighted boolean, updated_at timestamp without time zone)\n LANGUAGE sql\n STABLE SECURITY DEFINER\nAS $function$\n          SELECT\n            p.item_code::TEXT,\n            p.item_name::TEXT,\n            p.manufacturer_name::TEXT,\n            s.chain_id::TEXT,\n            s.store_id::TEXT,\n            s.store_name::TEXT,\n            s.city::TEXT,\n            pp.price,\n            CASE\n              WHEN COALESCE(pb.promo_price, pp.promo_price) IS NOT NULL\n                AND COALESCE(pb.promo_price, pp.promo_price) < pp.price\n                AND COALESCE(pb.promo_price, pp.promo_price) >= (pp.price * 0.05)\n              THEN COALESCE(pb.promo_price, pp.promo_price)\n              ELSE NULL\n            END AS promo_price,\n            LEAST(\n              pp.price,\n              COALESCE(pb.promo_price, pp.promo_price, pp.price)\n            ) AS effective_price,\n            pp.unit_of_measure::TEXT,\n            pp.unit_qty::TEXT,\n            COALESCE(pp.b_is_weighted, FALSE) AS b_is_weighted,\n            pp.updated_at\n          FROM products p\n          JOIN product_prices pp ON pp.product_id = p.id\n          JOIN stores s ON s.id = pp.store_id\n          LEFT JOIN LATERAL (\n            SELECT MIN(psi.promo_price) AS promo_price\n            FROM promotion_store_items psi\n            WHERE psi.product_id = pp.product_id\n              AND psi.store_id = pp.store_id\n              AND psi.promo_price IS NOT NULL\n              AND (psi.promotion_end_date IS NULL OR psi.promotion_end_date >= CURRENT_DATE)\n          ) pb ON TRUE\n          WHERE p.item_code = p_item_code\n            AND pp.price IS NOT NULL\n            AND (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')\n            AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)\n          ORDER BY LEAST(pp.price, COALESCE(pb.promo_price, pp.promo_price, pp.price)) ASC NULLS LAST, pp.updated_at DESC\n          LIMIT GREATEST(COALESCE(p_limit, 300), 1)\n          OFFSET GREATEST(COALESCE(p_offset, 0), 0);\n        $function$\n",
+  "get_top_city_promotions_def": "CREATE OR REPLACE FUNCTION public.get_top_city_promotions(p_city text, p_chain_id text DEFAULT NULL::text, p_store_id text DEFAULT NULL::text, p_window_hours integer DEFAULT 24, p_limit integer DEFAULT 50, p_offset integer DEFAULT 0, p_order_by text DEFAULT 'score'::text)\n RETURNS TABLE(item_code text, item_name text, manufacturer_name text, chain_id text, chain_name text, store_id text, store_name text, city text, unit_of_measure text, unit_qty text, b_is_weighted boolean, price numeric, promo_price numeric, effective_price numeric, discount_amount numeric, discount_percent numeric, smart_score numeric, promotion_end_date date, updated_at timestamp without time zone, promotion_id text, promotion_description text, promo_kind text, promo_label text, is_conditional_promo boolean, has_image boolean)\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\nAS $function$\n        DECLARE\n          v_scope TEXT;\n          v_chain_id TEXT := COALESCE(p_chain_id, '');\n          v_store_id TEXT := COALESCE(p_store_id, '');\n          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 1);\n          v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 200);\n          v_offset INT := GREATEST(COALESCE(p_offset, 0), 0);\n        BEGIN\n          v_scope := CASE\n            WHEN v_store_id <> '' THEN 'store'\n            WHEN v_chain_id <> '' THEN 'chain'\n            ELSE 'city'\n          END;\n\n          -- Snap window_hours to the nearest available cached window (avoids empty results for e.g. 720h)\n          SELECT MAX(c2.window_hours) INTO v_window_hours\n          FROM top_promotions_cache c2\n          WHERE c2.window_hours <= v_window_hours\n            AND c2.scope_type = v_scope;\n          -- Fallback: if nothing <= requested, take the smallest available\n          IF v_window_hours IS NULL THEN\n            SELECT MIN(c2.window_hours) INTO v_window_hours\n            FROM top_promotions_cache c2\n            WHERE c2.scope_type = v_scope;\n          END IF;\n          -- Last resort default\n          IF v_window_hours IS NULL THEN\n            v_window_hours := 24;\n          END IF;\n\n          RETURN QUERY\n          SELECT\n            c.item_code::TEXT,\n            c.item_name::TEXT,\n            c.manufacturer_name::TEXT,\n            c.chain_id::TEXT,\n            c.chain_name::TEXT,\n            c.store_id::TEXT,\n            c.store_name::TEXT,\n            c.city::TEXT,\n            c.unit_of_measure::TEXT,\n            c.unit_qty::TEXT,\n            COALESCE(c.b_is_weighted, FALSE) AS b_is_weighted,\n            c.price,\n            c.promo_price,\n            c.effective_price,\n            c.discount_amount,\n            c.discount_percent,\n            c.smart_score,\n            c.promotion_end_date,\n            c.updated_at,\n            COALESCE(c.promotion_id, '')::TEXT AS promotion_id,\n            COALESCE(c.promotion_description, '')::TEXT AS promotion_description,\n            COALESCE(c.promo_kind, 'regular')::TEXT AS promo_kind,\n            COALESCE(c.promo_label, 'מבצע')::TEXT AS promo_label,\n            COALESCE(c.is_conditional_promo, FALSE) AS is_conditional_promo,\n            c.has_image\n          FROM top_promotions_cache c\n          WHERE c.window_hours = v_window_hours\n            AND c.scope_type = v_scope\n            AND c.has_image IS TRUE\n            AND (p_city IS NULL OR p_city = '' OR c.city ILIKE p_city || '%')\n            AND (v_scope <> 'chain' OR c.chain_id = v_chain_id)\n            AND (v_scope <> 'store' OR c.store_id = v_store_id)\n            AND (v_scope <> 'store' OR v_chain_id = '' OR c.chain_id = v_chain_id)\n          ORDER BY\n            CASE WHEN p_order_by = 'percent' THEN c.discount_percent END DESC NULLS LAST,\n            CASE WHEN p_order_by = 'savings' THEN c.discount_amount END DESC NULLS LAST,\n            c.rank_position ASC\n          LIMIT v_limit\n          OFFSET v_offset;\n        END;\n        $function$\n",
+  "store_promotions_cache_schema": [
+    {
+      "col": "store_db_id",
+      "type": "integer"
+    },
+    {
+      "col": "chain_id",
+      "type": "character varying"
+    },
+    {
+      "col": "chain_name",
+      "type": "character varying"
+    },
+    {
+      "col": "store_id",
+      "type": "character varying"
+    },
+    {
+      "col": "store_name",
+      "type": "character varying"
+    },
+    {
+      "col": "city",
+      "type": "character varying"
+    },
+    {
+      "col": "time_window",
+      "type": "character varying"
+    },
+    {
+      "col": "promo_type",
+      "type": "character varying"
+    },
+    {
+      "col": "sort_metric",
+      "type": "character varying"
+    },
+    {
+      "col": "rank_position",
+      "type": "smallint"
+    },
+    {
+      "col": "item_code",
+      "type": "character varying"
+    },
+    {
+      "col": "item_name",
+      "type": "character varying"
+    },
+    {
+      "col": "manufacturer_name",
+      "type": "character varying"
+    },
+    {
+      "col": "unit_of_measure",
+      "type": "character varying"
+    },
+    {
+      "col": "unit_qty",
+      "type": "character varying"
+    },
+    {
+      "col": "b_is_weighted",
+      "type": "boolean"
+    },
+    {
+      "col": "price",
+      "type": "numeric"
+    },
+    {
+      "col": "promo_price",
+      "type": "numeric"
+    },
+    {
+      "col": "effective_price",
+      "type": "numeric"
+    },
+    {
+      "col": "discount_amount",
+      "type": "numeric"
+    },
+    {
+      "col": "discount_percent",
+      "type": "numeric"
+    },
+    {
+      "col": "smart_score",
+      "type": "numeric"
+    },
+    {
+      "col": "promo_kind",
+      "type": "character varying"
+    },
+    {
+      "col": "promo_label",
+      "type": "character varying"
+    },
+    {
+      "col": "promotion_id",
+      "type": "character varying"
+    },
+    {
+      "col": "promotion_description",
+      "type": "character varying"
+    },
+    {
+      "col": "promotion_end_date",
+      "type": "date"
+    },
+    {
+      "col": "updated_at",
+      "type": "timestamp without time zone"
+    },
+    {
+      "col": "refreshed_at",
+      "type": "timestamp without time zone"
+    }
+  ],
+  "yesh_hesed_in_promo_cache": [],
+  "jerusalem_chains_in_promo_cache": [
+    {
+      "chain_name": "Dor Alon",
+      "city": "ירושלים",
+      "count": 225
+    },
+    {
+      "chain_name": "אושר עד",
+      "city": "ירושלים",
+      "count": 597
+    },
+    {
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "city": "ירושלים",
+      "count": 2916
+    },
+    {
+      "chain_name": "זול ובגדול בע\"מ",
+      "city": "ירושלים",
+      "count": 4644
+    },
+    {
+      "chain_name": "מ. יוחננוף ובניו",
+      "city": "ירושלים",
+      "count": 504
+    },
+    {
+      "chain_name": "נתיב החסד- סופר חסד בע\"מ",
+      "city": "ירושלים",
+      "count": 705
+    },
+    {
+      "chain_name": "סופר יודה",
+      "city": "ירושלים",
+      "count": 150
+    },
+    {
+      "chain_name": "סופר ספיר בע\"מ",
+      "city": "ירושלים",
+      "count": 984
+    },
+    {
+      "chain_name": "רמי לוי שיווק השקמה",
+      "city": "ירושלים",
+      "count": 2643
+    },
+    {
+      "chain_name": "שפע ברכת השם בע\"מ",
+      "city": "ירושלים",
+      "count": 750
+    }
+  ]
+}

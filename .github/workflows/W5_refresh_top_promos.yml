@@ -1,0 +1,60 @@
+name: "W5 · Nightly Refresh Top Promotions"
+
+# Rafraîchit top_promotions_cache chaque nuit à 1h UTC.
+# Lance les 3 fenêtres temporelles : 24h, 7 jours, all-time.
+# Peut aussi être déclenché manuellement.
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 1h00 UTC chaque nuit
+  workflow_dispatch:
+    inputs:
+      top_n:
+        description: 'Nombre de promos max par magasin (défaut: 200)'
+        required: false
+        default: '200'
+      window_hours:
+        description: 'Fenêtre unique en heures (vide = toutes : 24h, 168h, all-time)'
+        required: false
+        default: ''
+
+# Indépendant du pipeline scrape — peut tourner en même temps que W1/W2/W3.
+# Un seul refresh à la fois (pas de doublon si déclenché manuellement pendant le cron).
+concurrency:
+  group: refresh-top-promotions
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: "Refresh top_promotions_cache"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scrapor/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scrapor/requirements.txt
+
+      - name: Refresh top promotions cache
+        env:
+          PYTHONUNBUFFERED: '1'
+          PYTHONIOENCODING: 'utf-8'
+          DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          BACKEND_API_URL: 'https://api.agali.live'
+        run: |
+          cd scrapor
+          TOP_N="${{ inputs.top_n || '200' }}"
+          WINDOW="${{ inputs.window_hours }}"
+          if [ -n "$WINDOW" ]; then
+            python refresh_top_promos.py --top-n "$TOP_N" --window-hours "$WINDOW"
+          else
+            python refresh_top_promos.py --top-n "$TOP_N"
+          fi

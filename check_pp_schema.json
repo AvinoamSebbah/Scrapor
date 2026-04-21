@@ -1,0 +1,68 @@
+{
+  "product_prices_columns": [
+    {
+      "col": "product_id",
+      "type": "integer"
+    },
+    {
+      "col": "store_id",
+      "type": "integer"
+    },
+    {
+      "col": "price",
+      "type": "numeric"
+    },
+    {
+      "col": "promo_price",
+      "type": "numeric"
+    },
+    {
+      "col": "updated_at",
+      "type": "timestamp without time zone"
+    },
+    {
+      "col": "unit_of_measure",
+      "type": "character varying"
+    },
+    {
+      "col": "unit_qty",
+      "type": "character varying"
+    },
+    {
+      "col": "b_is_weighted",
+      "type": "boolean"
+    }
+  ],
+  "product_prices_cols": [
+    "product_id",
+    "store_id",
+    "price",
+    "promo_price",
+    "updated_at",
+    "unit_of_measure",
+    "unit_qty",
+    "b_is_weighted"
+  ],
+  "product_prices_sample": [
+    {
+      "product_id": "13078978",
+      "store_id": "129607",
+      "price": "13.9",
+      "promo_price": "None",
+      "updated_at": "2026-03-28 03:29:17.422460",
+      "unit_of_measure": "None",
+      "unit_qty": "None",
+      "b_is_weighted": "False"
+    },
+    {
+      "product_id": "13087146",
+      "store_id": "129607",
+      "price": "10.9",
+      "promo_price": "None",
+      "updated_at": "2026-03-28 03:29:17.422460",
+      "unit_of_measure": "None",
+      "unit_qty": "None",
+      "b_is_weighted": "False"
+    }
+  ]
+}

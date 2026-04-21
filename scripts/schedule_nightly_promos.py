@@ -28,9 +28,10 @@ from pathlib import Path
 TRIGGER_HOUR   = int(os.getenv("NIGHTLY_PROMOS_HOUR",   "2"))
 TRIGGER_MINUTE = int(os.getenv("NIGHTLY_PROMOS_MINUTE", "0"))
 
-# Chemin du script à exécuter (relatif à ce fichier)
+# Chemins des scripts à exécuter (relatifs à ce fichier)
 SCRIPT_DIR  = Path(__file__).resolve().parent.parent
 REFRESH_SCRIPT = SCRIPT_DIR / "nightly_promos_refresh.py"
+REFRESH_TOP_SCRIPT = SCRIPT_DIR / "refresh_top_promos.py"
 
 RETRY_DELAY_SECS = 5 * 60   # 5 min si échec
 POLL_INTERVAL    = 30        # vérification toutes les 30 secondes
@@ -60,24 +61,48 @@ def next_run_at() -> datetime:
 
 
 def run_refresh() -> bool:
-    """Lance nightly_promos_refresh.py et retourne True si succès."""
+    """Lance nightly_promos_refresh.py puis refresh_top_promos.py, retourne True si tout réussit."""
     log(f"🚀  Démarrage de {REFRESH_SCRIPT.name} …")
     try:
         env = os.environ.copy()
         result = subprocess.run(
             [sys.executable, str(REFRESH_SCRIPT)],
             env=env,
-            capture_output=False,   # stdout/stderr visible dans les logs
-            timeout=3600,           # 1 heure max
+            capture_output=False,
+            timeout=3600,
+        )
+        if result.returncode != 0:
+            log(f"❌  {REFRESH_SCRIPT.name} a terminé avec code {result.returncode}.")
+            return False
+        log(f"✅  {REFRESH_SCRIPT.name} terminé avec succès.")
+    except subprocess.TimeoutExpired:
+        log(f"⏱️   Timeout dépassé pour {REFRESH_SCRIPT.name}. Interrompu.")
+        return False
+    except Exception as e:
+        log(f"❌  Erreur inattendue ({REFRESH_SCRIPT.name}) : {e}")
+        return False
+
+    log(f"🚀  Démarrage de {REFRESH_TOP_SCRIPT.name} …")
+    try:
+        env = os.environ.copy()
+        result = subprocess.run(
+            [sys.executable, str(REFRESH_TOP_SCRIPT)],
+            env=env,
+            capture_output=False,
+            timeout=600,
         )
         if result.returncode == 0:
-            log("✅  Refresh terminé avec succès.")
+            log(f"✅  {REFRESH_TOP_SCRIPT.name} terminé avec succès.")
             return True
         else:
-            log(f"❌  Le script a terminé avec code {result.returncode}.")
+            log(f"❌  {REFRESH_TOP_SCRIPT.name} a terminé avec code {result.returncode}.")
             return False
     except subprocess.TimeoutExpired:
-        log("⏱️   Timeout dépassé (1h). Refresh interrompu.")
+        log(f"⏱️   Timeout dépassé pour {REFRESH_TOP_SCRIPT.name}. Interrompu.")
+        return False
+    except Exception as e:
+        log(f"❌  Erreur inattendue ({REFRESH_TOP_SCRIPT.name}) : {e}")
+        return False
         return False
     except Exception as e:
         log(f"❌  Erreur inattendue : {e}")
@@ -92,8 +117,12 @@ def main():
         log(f"❌  Script introuvable : {REFRESH_SCRIPT}")
         sys.exit(1)
 
+    if not REFRESH_TOP_SCRIPT.exists():
+        log(f"❌  Script introuvable : {REFRESH_TOP_SCRIPT}")
+        sys.exit(1)
+
     log(f"⏱️   Scheduler démarré. Déclenchement chaque nuit à {TRIGGER_HOUR:02d}:{TRIGGER_MINUTE:02d}.")
-    log(f"   Script cible : {REFRESH_SCRIPT}")
+    log(f"   Scripts : {REFRESH_SCRIPT.name} → {REFRESH_TOP_SCRIPT.name}")
 
     last_run_date = None
 

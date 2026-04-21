@@ -358,6 +358,7 @@ def update_functions():
 
         cur.execute("""
         DROP FUNCTION IF EXISTS get_offers_for_item_code(TEXT, TEXT, TEXT, INT, INT);
+        DROP FUNCTION IF EXISTS get_offers_for_item_code(TEXT, TEXT, TEXT, INT, INT, TEXT);
         """)
         print("✅ drop get_offers_for_item_code (for return signature update)")
 
@@ -367,7 +368,8 @@ def update_functions():
           p_city TEXT DEFAULT NULL,
           p_chain_id TEXT DEFAULT NULL,
           p_limit INT DEFAULT 300,
-          p_offset INT DEFAULT 0
+          p_offset INT DEFAULT 0,
+          p_chain_name TEXT DEFAULT NULL
         )
         RETURNS TABLE(
           item_code TEXT,
@@ -425,6 +427,7 @@ def update_functions():
             AND pp.price IS NOT NULL
             AND (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
             AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
+            AND (p_chain_name IS NULL OR p_chain_name = '' OR s.chain_name ILIKE p_chain_name)
           ORDER BY LEAST(pp.price, COALESCE(pb.promo_price, pp.promo_price, pp.price)) ASC NULLS LAST, pp.updated_at DESC
           LIMIT GREATEST(COALESCE(p_limit, 300), 1)
           OFFSET GREATEST(COALESCE(p_offset, 0), 0);
@@ -434,6 +437,7 @@ def update_functions():
 
         cur.execute("""
         DROP FUNCTION IF EXISTS get_city_offers_for_search(TEXT, TEXT, TEXT, INT, INT);
+        DROP FUNCTION IF EXISTS get_city_offers_for_search(TEXT, TEXT, TEXT, INT, INT, TEXT);
         """)
         print("✅ drop get_city_offers_for_search (for return signature update)")
 
@@ -443,7 +447,8 @@ def update_functions():
           p_city TEXT,
           p_chain_id TEXT DEFAULT NULL,
           p_limit_products INT DEFAULT 10,
-          p_offset_products INT DEFAULT 0
+          p_offset_products INT DEFAULT 0,
+          p_chain_name TEXT DEFAULT NULL
         )
         RETURNS TABLE(
           product_rank BIGINT,
@@ -498,6 +503,7 @@ def update_functions():
             FROM stores s
             WHERE (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
               AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
+              AND (p_chain_name IS NULL OR p_chain_name = '' OR s.chain_name ILIKE p_chain_name)
           )
           SELECT
             rp.product_rank,
@@ -539,19 +545,38 @@ def update_functions():
         print("✅ get_city_offers_for_search")
 
         cur.execute("""
+        ALTER TABLE top_promotions_cache
+          ADD COLUMN IF NOT EXISTS promotion_id VARCHAR DEFAULT NULL,
+          ADD COLUMN IF NOT EXISTS promotion_description VARCHAR DEFAULT NULL,
+          ADD COLUMN IF NOT EXISTS promo_kind VARCHAR DEFAULT 'regular',
+          ADD COLUMN IF NOT EXISTS promo_label VARCHAR DEFAULT 'מבצע',
+          ADD COLUMN IF NOT EXISTS is_conditional_promo BOOLEAN DEFAULT FALSE;
+        """)
+        print("✅ ALTER TABLE top_promotions_cache (promo context cols)")
+
+        cur.execute("""
         CREATE OR REPLACE FUNCTION refresh_top_promotions_cache(
           p_window_hours INT DEFAULT 24,
           p_top_n INT DEFAULT 200
         )
         RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
         DECLARE
-          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 1);
-          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 200);
+          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 0);
+          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 5000);
           affected_rows INTEGER := 0;
         BEGIN
+          -- Preserve has_image state before wiping the cache
+          CREATE TEMP TABLE IF NOT EXISTS _img_state_backup (item_code TEXT, has_image BOOLEAN);
+          DELETE FROM _img_state_backup;
+          INSERT INTO _img_state_backup (item_code, has_image)
+          SELECT item_code, bool_or(has_image)
+          FROM top_promotions_cache
+          WHERE window_hours = v_window_hours AND has_image IS NOT NULL
+          GROUP BY item_code;
+
           DELETE FROM top_promotions_cache WHERE window_hours = v_window_hours;
 
-          scoped_store_promos AS (
+          WITH scoped_store_promos AS (
             SELECT
               s.id AS store_db_id,
               s.city::TEXT AS city,
@@ -589,6 +614,22 @@ def update_functions():
               ) AS smart_score,
               psi.promotion_end_date,
               psi.updated_at,
+              psi.promotion_id::TEXT AS promotion_id,
+              promo_meta.promotion_description::TEXT AS promotion_description,
+              CASE
+                WHEN promo_meta.promotion_description ILIKE '%ביטוח%' THEN 'insurance'
+                WHEN promo_meta.promotion_description ILIKE ANY(ARRAY['%אשראי%','%כרטיס%','%ויזה%','%מאסטר%','%אמקס%','%visa%','%mastercard%']) THEN 'card'
+                WHEN (
+                  COALESCE(promo_meta.additional_is_coupon, '') IN ('1', 'true', 'TRUE')
+                  OR promo_meta.promotion_description ILIKE '%קופון%'
+                ) THEN 'coupon'
+                WHEN (
+                  promo_meta.club_id IS NOT NULL
+                  AND LOWER(TRIM(COALESCE(promo_meta.club_id, ''))) NOT IN ('', '0', '0.0', '-1', 'no_body', 'nobody', 'none', 'null', 'nan', 'false', 'f')
+                  OR promo_meta.promotion_description ILIKE '%מועדון%'
+                ) THEN 'club'
+                ELSE 'regular'
+              END AS promo_kind_computed,
               ROW_NUMBER() OVER (
                 PARTITION BY s.id
                 ORDER BY 
@@ -603,6 +644,7 @@ def update_functions():
             JOIN stores s ON s.id = psi.store_id
             JOIN product_prices pp ON pp.product_id = psi.product_id AND pp.store_id = psi.store_id
             JOIN products p ON p.id = psi.product_id
+            LEFT JOIN promotions promo_meta ON promo_meta.chain_id = psi.chain_id AND promo_meta.promotion_id = psi.promotion_id
             WHERE COALESCE(s.city, '') <> ''
               AND psi.promo_price IS NOT NULL
               AND psi.promo_price > 0
@@ -616,11 +658,23 @@ def update_functions():
               AND p.item_code ~ '^[0-9]{8,14}$'
               AND COALESCE(BTRIM(p.item_name), '') <> ''
               AND p.item_name NOT ILIKE '%משלוח%'
+              AND p.item_name NOT ILIKE ANY(ARRAY[
+                '%וויסקי%','%ויסקי%','%ווסקי%','%וודקה%',
+                '%יין%','%ערק%','%בירה%','%רום%',
+                '%ברנדי%','%קוניאק%','%שמפניה%','%ליקר%',
+                '%סיגריות%','%טבק%','%סיגר%','%אלכוהול%',
+                '%שיבאס%','%גלנליווט%','%גים בים%',
+                '%ט.קוארבו%','%אוזו%','%פלומרי%',
+                '%whisky%','%whiskey%','% wine %','%wine%','% beer %','%vodka%',
+                '%brandy%','%cognac%','%champagne%','%liqueur%','%liquor%',
+                '%tequila%','%rum %','% rum%','%bourbon%','%scotch%',
+                '%cigarette%','%tobacco%','%cigar%'
+              ])
           ),
           scored_raw AS (
             SELECT *
             FROM scoped_store_promos
-            WHERE store_rank <= 250
+            WHERE store_rank <= GREATEST(250, v_top_n)
           ),
           deduped AS (
 
@@ -631,64 +685,6 @@ def update_functions():
                 ORDER BY sr.promo_price ASC NULLS LAST, sr.updated_at DESC NULLS LAST
               ) AS dedupe_rank
             FROM scored_raw sr
-          ),
-          city_ranked AS (
-            SELECT
-              'city'::TEXT AS scope_type,
-              d.city,
-              d.chain_id,
-              d.chain_name,
-              d.store_id,
-              d.store_name,
-              ROW_NUMBER() OVER (
-                PARTITION BY d.city
-                ORDER BY d.smart_score DESC NULLS LAST, d.discount_percent DESC NULLS LAST, d.discount_amount DESC NULLS LAST, d.updated_at DESC NULLS LAST, d.item_code ASC
-              ) AS rank_position,
-              d.item_code,
-              d.item_name,
-              d.manufacturer_name,
-              d.unit_of_measure,
-              d.unit_qty,
-              d.b_is_weighted,
-              d.price,
-              d.promo_price,
-              d.effective_price,
-              d.discount_amount,
-              d.discount_percent,
-              d.smart_score,
-              d.promotion_end_date,
-              d.updated_at
-            FROM deduped d
-            WHERE d.dedupe_rank = 1
-          ),
-          chain_ranked AS (
-            SELECT
-              'chain'::TEXT AS scope_type,
-              d.city,
-              d.chain_id,
-              d.chain_name,
-              ''::TEXT AS store_id,
-              NULL::TEXT AS store_name,
-              ROW_NUMBER() OVER (
-                PARTITION BY d.city, d.chain_id
-                ORDER BY d.smart_score DESC NULLS LAST, d.discount_percent DESC NULLS LAST, d.discount_amount DESC NULLS LAST, d.updated_at DESC NULLS LAST, d.item_code ASC
-              ) AS rank_position,
-              d.item_code,
-              d.item_name,
-              d.manufacturer_name,
-              d.unit_of_measure,
-              d.unit_qty,
-              d.b_is_weighted,
-              d.price,
-              d.promo_price,
-              d.effective_price,
-              d.discount_amount,
-              d.discount_percent,
-              d.smart_score,
-              d.promotion_end_date,
-              d.updated_at
-            FROM deduped d
-            WHERE d.dedupe_rank = 1
           ),
           store_ranked AS (
             SELECT
@@ -715,7 +711,10 @@ def update_functions():
               d.discount_percent,
               d.smart_score,
               d.promotion_end_date,
-              d.updated_at
+              d.updated_at,
+              d.promotion_id,
+              d.promotion_description,
+              d.promo_kind_computed
             FROM deduped d
             WHERE d.dedupe_rank = 1
           )
@@ -742,6 +741,11 @@ def update_functions():
             smart_score,
             promotion_end_date,
             updated_at,
+            promotion_id,
+            promotion_description,
+            promo_kind,
+            promo_label,
+            is_conditional_promo,
             refreshed_at
           )
           SELECT
@@ -767,16 +771,32 @@ def update_functions():
             q.smart_score,
             q.promotion_end_date,
             q.updated_at,
+            q.promotion_id,
+            q.promotion_description,
+            COALESCE(q.promo_kind_computed, 'regular') AS promo_kind,
+            CASE COALESCE(q.promo_kind_computed, 'regular')
+              WHEN 'coupon'    THEN 'קופון'
+              WHEN 'card'      THEN 'הטבת אשראי'
+              WHEN 'club'      THEN 'הטבת מועדון'
+              WHEN 'insurance' THEN 'הטבת ביטוח'
+              ELSE 'מבצע'
+            END AS promo_label,
+            (COALESCE(q.promo_kind_computed, 'regular') <> 'regular') AS is_conditional_promo,
             NOW()
           FROM (
-            SELECT * FROM city_ranked WHERE rank_position <= v_top_n
-            UNION ALL
-            SELECT * FROM chain_ranked WHERE rank_position <= v_top_n
-            UNION ALL
             SELECT * FROM store_ranked WHERE rank_position <= v_top_n
           ) q;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;
+
+          -- Restore has_image from backup (preserves image-check state across refreshes)
+          UPDATE top_promotions_cache tpc
+          SET has_image = s.has_image
+          FROM _img_state_backup s
+          WHERE tpc.item_code = s.item_code
+            AND tpc.window_hours = v_window_hours
+            AND s.has_image IS NOT NULL;
+
           RETURN affected_rows;
         END;
         $$;
@@ -786,6 +806,8 @@ def update_functions():
         cur.execute("""
         DROP FUNCTION IF EXISTS get_top_city_promotions(TEXT, TEXT, TEXT, INT, INT, INT);
         DROP FUNCTION IF EXISTS get_top_city_promotions(TEXT, TEXT, TEXT, INT, INT, INT, TEXT);
+        DROP FUNCTION IF EXISTS get_top_city_promotions(TEXT, TEXT, TEXT, INT, INT, INT, TEXT, BOOLEAN);
+        DROP FUNCTION IF EXISTS get_top_city_promotions(TEXT, TEXT, TEXT, INT, INT, INT, TEXT, TEXT);
         """)
         print("✅ drop get_top_city_promotions (for return signature update)")
 
@@ -797,7 +819,8 @@ def update_functions():
           p_window_hours INT DEFAULT 24,
           p_limit INT DEFAULT 50,
           p_offset INT DEFAULT 0,
-          p_order_by TEXT DEFAULT 'score'
+          p_order_by TEXT DEFAULT 'score',
+          p_chain_name TEXT DEFAULT NULL
         )
         RETURNS TABLE(
           item_code TEXT,
@@ -818,55 +841,96 @@ def update_functions():
           discount_percent NUMERIC,
           smart_score NUMERIC,
           promotion_end_date DATE,
-          updated_at TIMESTAMP
+          updated_at TIMESTAMP,
+          promotion_id TEXT,
+          promotion_description TEXT,
+          promo_kind TEXT,
+          promo_label TEXT,
+          is_conditional_promo BOOLEAN,
+          has_image BOOLEAN
         )
         LANGUAGE plpgsql STABLE SECURITY DEFINER AS $$
         DECLARE
-          v_scope TEXT;
           v_chain_id TEXT := COALESCE(p_chain_id, '');
           v_store_id TEXT := COALESCE(p_store_id, '');
-          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 1);
-          v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 50);
+          v_window_hours INT;
+          v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 200);
           v_offset INT := GREATEST(COALESCE(p_offset, 0), 0);
         BEGIN
-          v_scope := CASE
-            WHEN v_store_id <> '' THEN 'store'
-            WHEN v_chain_id <> '' THEN 'chain'
-            ELSE 'city'
-          END;
+          -- Cache uniquement en scope 'store'. On agrège à la volée par item_code.
+          -- p_window_hours = 0 = "all time" : chercher window_hours = 0 dans le cache.
+          IF COALESCE(p_window_hours, 24) = 0 THEN
+            SELECT 0 INTO v_window_hours
+            FROM top_promotions_cache c2
+            WHERE c2.window_hours = 0 AND c2.scope_type = 'store'
+            LIMIT 1;
+            IF v_window_hours IS NULL THEN
+              SELECT MAX(c2.window_hours) INTO v_window_hours
+              FROM top_promotions_cache c2 WHERE c2.scope_type = 'store';
+            END IF;
+          ELSE
+            -- Snap à la fenêtre disponible la plus proche (<= demandée)
+            SELECT MAX(c2.window_hours) INTO v_window_hours
+            FROM top_promotions_cache c2
+            WHERE c2.window_hours <= COALESCE(p_window_hours, 24)
+              AND c2.scope_type = 'store';
+            IF v_window_hours IS NULL THEN
+              SELECT MIN(c2.window_hours) INTO v_window_hours
+              FROM top_promotions_cache c2 WHERE c2.scope_type = 'store';
+            END IF;
+          END IF;
+          IF v_window_hours IS NULL THEN v_window_hours := 24; END IF;
 
           RETURN QUERY
+          WITH candidates AS (
+            SELECT c.*
+            FROM top_promotions_cache c
+            WHERE c.window_hours = v_window_hours
+              AND c.scope_type = 'store'
+              AND c.has_image IS TRUE
+              AND (p_city IS NULL OR p_city = '' OR c.city ILIKE p_city || '%')
+              AND (v_chain_id = '' OR c.chain_id = v_chain_id)
+              AND (v_store_id = '' OR c.store_id = v_store_id)
+              AND (p_chain_name IS NULL OR p_chain_name = '' OR c.chain_name ILIKE p_chain_name)
+          ),
+          best_per_item AS (
+            -- Pour chaque item_code, garder le meilleur magasin (smart_score DESC)
+            SELECT DISTINCT ON (c.item_code) c.*
+            FROM candidates c
+            ORDER BY c.item_code, c.smart_score DESC NULLS LAST, c.rank_position ASC
+          )
           SELECT
-            c.item_code::TEXT,
-            c.item_name::TEXT,
-            c.manufacturer_name::TEXT,
-            c.chain_id::TEXT,
-            c.chain_name::TEXT,
-            c.store_id::TEXT,
-            c.store_name::TEXT,
-            c.city::TEXT,
-            c.unit_of_measure::TEXT,
-            c.unit_qty::TEXT,
-            COALESCE(c.b_is_weighted, FALSE) AS b_is_weighted,
-            c.price,
-            c.promo_price,
-            c.effective_price,
-            c.discount_amount,
-            c.discount_percent,
-            c.smart_score,
-            c.promotion_end_date,
-            c.updated_at
-          FROM top_promotions_cache c
-          WHERE c.window_hours = v_window_hours
-            AND c.scope_type = v_scope
-            AND (p_city IS NULL OR p_city = '' OR c.city ILIKE p_city || '%')
-            AND (v_scope <> 'chain' OR c.chain_id = v_chain_id)
-            AND (v_scope <> 'store' OR c.store_id = v_store_id)
-            AND (v_scope <> 'store' OR v_chain_id = '' OR c.chain_id = v_chain_id)
+            b.item_code::TEXT,
+            b.item_name::TEXT,
+            b.manufacturer_name::TEXT,
+            b.chain_id::TEXT,
+            b.chain_name::TEXT,
+            b.store_id::TEXT,
+            b.store_name::TEXT,
+            b.city::TEXT,
+            b.unit_of_measure::TEXT,
+            b.unit_qty::TEXT,
+            COALESCE(b.b_is_weighted, FALSE) AS b_is_weighted,
+            b.price,
+            b.promo_price,
+            b.effective_price,
+            b.discount_amount,
+            b.discount_percent,
+            b.smart_score,
+            b.promotion_end_date,
+            b.updated_at,
+            COALESCE(b.promotion_id, '')::TEXT AS promotion_id,
+            COALESCE(b.promotion_description, '')::TEXT AS promotion_description,
+            COALESCE(b.promo_kind, 'regular')::TEXT AS promo_kind,
+            COALESCE(b.promo_label, 'מבצע')::TEXT AS promo_label,
+            COALESCE(b.is_conditional_promo, FALSE) AS is_conditional_promo,
+            b.has_image
+          FROM best_per_item b
           ORDER BY
-            CASE WHEN p_order_by = 'percent' THEN c.discount_percent END DESC NULLS LAST,
-            CASE WHEN p_order_by = 'savings' THEN c.discount_amount END DESC NULLS LAST,
-            c.rank_position ASC
+            CASE WHEN p_order_by = 'percent' THEN b.discount_percent END DESC NULLS LAST,
+            CASE WHEN p_order_by = 'savings' THEN b.discount_amount END DESC NULLS LAST,
+            b.smart_score DESC NULLS LAST,
+            b.rank_position ASC
           LIMIT v_limit
           OFFSET v_offset;
         END;

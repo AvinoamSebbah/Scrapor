@@ -1,0 +1,347 @@
+{
+  "all_tables": [
+    "auth_tokens",
+    "maintenance_state",
+    "processed_files",
+    "product_prices",
+    "product_search_stats",
+    "products",
+    "promotion_items",
+    "promotion_store_items",
+    "promotions",
+    "shopping_lists",
+    "store_promotions_cache",
+    "stores",
+    "top_promotions_cache",
+    "user_carts",
+    "user_preferences",
+    "users"
+  ],
+  "yesh_hesed_jlm_stores": [
+    {
+      "id": 95971,
+      "chain_name": "יש חסד",
+      "store_name": "יש חסד בית וגן",
+      "city": "ירושלים"
+    },
+    {
+      "id": 96162,
+      "chain_name": "יש חסד",
+      "store_name": "יש חסד ירושלים-קרית שאול",
+      "city": "ירושלים"
+    },
+    {
+      "id": 96205,
+      "chain_name": "יש חסד",
+      "store_name": "יש חסד ירושלים- רמת שלמה",
+      "city": "ירושלים"
+    },
+    {
+      "id": 96055,
+      "chain_name": "יש חסד",
+      "store_name": "יש חסד כנפי נשרים",
+      "city": "ירושלים"
+    }
+  ],
+  "jerusalem_exact_match_count": 134,
+  "jerusalem_ilike_count": 134,
+  "jerusalem_variants": [
+    "ירושלים"
+  ],
+  "yesh_hesed_jlm_city_values": [
+    {
+      "id": 95971,
+      "city": "ירושלים"
+    },
+    {
+      "id": 96205,
+      "city": "ירושלים"
+    },
+    {
+      "id": 96162,
+      "city": "ירושלים"
+    },
+    {
+      "id": 96055,
+      "city": "ירושלים"
+    }
+  ],
+  "city_exact_store_ids_count": 134,
+  "yesh_hesed_in_exact_list": [
+    95971,
+    96162,
+    96205,
+    96055
+  ],
+  "yesh_hesed_MISSING_from_exact_list": [],
+  "product_prices_by_store": {
+    "95971": 6171,
+    "96162": 6338,
+    "96205": 6012,
+    "96055": 6610
+  },
+  "db_functions": [
+    {
+      "name": "cleanup_expired_promotions",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "cleanup_old_processed_files",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "cleanup_stale_prices",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "get_city_offers_for_search",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "get_offers_for_item_code",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "get_store_promotions",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "get_table_stats",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "get_top_city_promotions",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gin_extract_query_trgm",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gin_extract_value_trgm",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gin_trgm_consistent",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gin_trgm_triconsistent",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_compress",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_consistent",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_decompress",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_distance",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_in",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_options",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_out",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_penalty",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_picksplit",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_same",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "gtrgm_union",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "merge_promotions",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "refresh_product_search_stats",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "refresh_promotion_items",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "refresh_promotion_store_items",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "refresh_store_promotions_window",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "refresh_top_promotions_cache",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "search_products_fts",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "set_limit",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "show_limit",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "show_trgm",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "similarity",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "similarity_dist",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "similarity_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "strict_word_similarity",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "strict_word_similarity_commutator_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "strict_word_similarity_dist_commutator_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "strict_word_similarity_dist_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "strict_word_similarity_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "update_shopping_list_timestamp",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "update_updated_at_column",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "upsert_product_prices",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "word_similarity",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "word_similarity_commutator_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "word_similarity_dist_commutator_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "word_similarity_dist_op",
+      "type": "FUNCTION"
+    },
+    {
+      "name": "word_similarity_op",
+      "type": "FUNCTION"
+    }
+  ],
+  "all_tables_with_type": [
+    {
+      "name": "auth_tokens",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "maintenance_state",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "processed_files",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "product_prices",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "product_search_stats",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "products",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "promotion_items",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "promotion_store_items",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "promotions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "shopping_lists",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "store_promotions_cache",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "stores",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "top_promotions_cache",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_carts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_preferences",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "users",
+      "type": "BASE TABLE"
+    }
+  ]
+}

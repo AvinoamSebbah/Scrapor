@@ -1,0 +1,960 @@
+{
+  "1_chain_distribution": [
+    {
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "count": 264
+    },
+    {
+      "chain_name": "Dor Alon",
+      "count": 157
+    },
+    {
+      "chain_name": "רמי לוי שיווק השקמה",
+      "count": 99
+    },
+    {
+      "chain_name": "BE",
+      "count": 95
+    },
+    {
+      "chain_name": "שופרסל אקספרס",
+      "count": 94
+    },
+    {
+      "chain_name": "נתיב החסד- סופר חסד בע\"מ",
+      "count": 92
+    },
+    {
+      "chain_name": "גוד פארם בע\"מ",
+      "count": 80
+    },
+    {
+      "chain_name": "שופרסל שלי",
+      "count": 80
+    },
+    {
+      "chain_name": "שופרסל דיל",
+      "count": 79
+    },
+    {
+      "chain_name": "סיטי מרקט",
+      "count": 72
+    },
+    {
+      "chain_name": "סופר ספיר בע\"מ",
+      "count": 58
+    },
+    {
+      "chain_name": "טיב טעם",
+      "count": 53
+    },
+    {
+      "chain_name": "מ. יוחננוף ובניו",
+      "count": 50
+    },
+    {
+      "chain_name": "פרש מרקט",
+      "count": 45
+    },
+    {
+      "chain_name": null,
+      "count": 44
+    },
+    {
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "count": 37
+    },
+    {
+      "chain_name": "זול ובגדול בע\"מ",
+      "count": 35
+    },
+    {
+      "chain_name": "רמי לוי בשכונה",
+      "count": 34
+    },
+    {
+      "chain_name": "וולט מרקט",
+      "count": 31
+    },
+    {
+      "chain_name": "סיטי צפריר בע\"מ",
+      "count": 28
+    },
+    {
+      "chain_name": "קשת טעמים",
+      "count": 27
+    },
+    {
+      "chain_name": "סופר יודה",
+      "count": 27
+    },
+    {
+      "chain_name": "שוק העיר (ט.ע.מ.ס.) בע\"מ",
+      "count": 26
+    },
+    {
+      "chain_name": "יוניברס",
+      "count": 24
+    },
+    {
+      "chain_name": "אושר עד",
+      "count": 23
+    },
+    {
+      "chain_name": "שפע ברכת השם בע\"מ",
+      "count": 22
+    },
+    {
+      "chain_name": "יש חסד",
+      "count": 21
+    },
+    {
+      "chain_name": "סופר ברקת קמעונאות בע\"מ",
+      "count": 14
+    },
+    {
+      "chain_name": "יש",
+      "count": 12
+    },
+    {
+      "chain_name": "סטופמרקט",
+      "count": 11
+    }
+  ],
+  "2_shufersal_subchains": [
+    {
+      "chain_name": "BE",
+      "count": 95
+    },
+    {
+      "chain_name": "שופרסל אקספרס",
+      "count": 94
+    },
+    {
+      "chain_name": "שופרסל שלי",
+      "count": 80
+    },
+    {
+      "chain_name": "שופרסל דיל",
+      "count": 79
+    },
+    {
+      "chain_name": "יוניברס",
+      "count": 24
+    },
+    {
+      "chain_name": "יש חסד",
+      "count": 21
+    },
+    {
+      "chain_name": "יש",
+      "count": 12
+    },
+    {
+      "chain_name": "שופרסל",
+      "count": 11
+    },
+    {
+      "chain_name": "גוד מרקט",
+      "count": 6
+    },
+    {
+      "chain_name": "שופרסל ONLINE",
+      "count": 1
+    }
+  ],
+  "3_yesh_hesed_stores": [
+    {
+      "store_id": "609",
+      "store_name": "יש חסד אלעד-ניסים גאון",
+      "chain_name": "יש חסד",
+      "city": "אלעד",
+      "address": "ניסים גאון 79"
+    },
+    {
+      "store_id": "73",
+      "store_name": "יש חסד אשדוד",
+      "chain_name": "יש חסד",
+      "city": "אשדוד",
+      "address": "חנה סנש 9"
+    },
+    {
+      "store_id": "300",
+      "store_name": "יש חסד בארות יצחק- פאוור",
+      "chain_name": "יש חסד",
+      "city": "בארות יצחק",
+      "address": "בארות יצחק"
+    },
+    {
+      "store_id": "593",
+      "store_name": "יש חסד באר טוביה",
+      "chain_name": "יש חסד",
+      "city": "באר טוביה",
+      "address": "אזור התעשייה"
+    },
+    {
+      "store_id": "133",
+      "store_name": "יש חסד ביתר עילית-  הר\"ן",
+      "chain_name": "יש חסד",
+      "city": "ביתר עילית",
+      "address": "הר\"ן 6 פינת פנים המאירים"
+    },
+    {
+      "store_id": "606",
+      "store_name": "יש חסד בית שמש- מ. מסחרי",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "מרכז מסחרי רמה א"
+    },
+    {
+      "store_id": "765",
+      "store_name": "יש חסד בן איש חי",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "43 בן אישחי"
+    },
+    {
+      "store_id": "234",
+      "store_name": "יש חסד רסידו",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "נהר הירדן"
+    },
+    {
+      "store_id": "611",
+      "store_name": "יש חסד בני ברק- השומר",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "השומר 10"
+    },
+    {
+      "store_id": "219",
+      "store_name": "יש חסד בני ברק- עזרא",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "עזרה בני ברק"
+    },
+    {
+      "store_id": "295",
+      "store_name": "יש חסד בני ברק-שלמה המלך",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "שלמה המלך   12"
+    },
+    {
+      "store_id": "111",
+      "store_name": "יש חסד טבריה עלית-לב האג",
+      "chain_name": "יש חסד",
+      "city": "טבריה",
+      "address": "לב האגם 10"
+    },
+    {
+      "store_id": "364",
+      "store_name": "יש חסד בית וגן",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "1 זנגוויל"
+    },
+    {
+      "store_id": "608",
+      "store_name": "יש חסד ירושלים-קרית שאול",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "נאג'רה 2"
+    },
+    {
+      "store_id": "610",
+      "store_name": "יש חסד ירושלים- רמת שלמה",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "ברכת אברהם 22"
+    },
+    {
+      "store_id": "496",
+      "store_name": "יש חסד כנפי נשרים",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "כנפי נשרים 24"
+    },
+    {
+      "store_id": "81",
+      "store_name": "יש חסד מודיעין עלית דרום",
+      "chain_name": "יש חסד",
+      "city": "מודיעין עילית",
+      "address": "שערי תשובה 3"
+    },
+    {
+      "store_id": "499",
+      "store_name": "יש חסד עפולה עילית",
+      "chain_name": "יש חסד",
+      "city": "עפולה",
+      "address": "24 פנחס רוזן"
+    },
+    {
+      "store_id": "349",
+      "store_name": "יש חסד צפת- כנען",
+      "chain_name": "יש חסד",
+      "city": "צפת",
+      "address": "הר כנען"
+    },
+    {
+      "store_id": "607",
+      "store_name": "יש חסד מודיעין עלי-ק.ספר",
+      "chain_name": "יש חסד",
+      "city": "קרית ספר",
+      "address": "אבני נזר 46"
+    },
+    {
+      "store_id": "62",
+      "store_name": "יש חסד רכסים",
+      "chain_name": "יש חסד",
+      "city": "רכסים",
+      "address": "הכלניות 49"
+    }
+  ],
+  "4_stores_with_yesh_in_name": [
+    {
+      "store_id": "762",
+      "store_name": "BE אוסישקין",
+      "chain_name": "BE",
+      "city": "מודיעין",
+      "address": "2 החסידה"
+    },
+    {
+      "store_id": "781",
+      "store_name": "BE פרישמן ת\"א",
+      "chain_name": "BE",
+      "city": "תל אביב",
+      "address": "דיזינגוף 102"
+    },
+    {
+      "store_id": "853",
+      "store_name": "חריש",
+      "chain_name": "Dor Alon",
+      "city": "1247.0",
+      "address": "{}"
+    },
+    {
+      "store_id": "722",
+      "store_name": "ישרש",
+      "chain_name": "Dor Alon",
+      "city": "828.0",
+      "address": "מושב ישרש"
+    },
+    {
+      "store_id": "717",
+      "store_name": "לכיש",
+      "chain_name": "Dor Alon",
+      "city": "לכיש",
+      "address": "מושב לכיש"
+    },
+    {
+      "store_id": "75",
+      "store_name": "גבעתיים - תפוצות ישראל",
+      "chain_name": "גוד פארם בע\"מ",
+      "city": "גבעתיים",
+      "address": "תפוצות ישראל 6"
+    },
+    {
+      "store_id": "22",
+      "store_name": "בית ישראל",
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "city": "ירושלים",
+      "address": "בית ישראל 17"
+    },
+    {
+      "store_id": "43",
+      "store_name": "השישה עשר",
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "city": "ירושלים",
+      "address": "השישה עשר 39"
+    },
+    {
+      "store_id": "17",
+      "store_name": "מודיעין ישפרו",
+      "chain_name": "טיב טעם",
+      "city": "מודיעין",
+      "address": "שדרות המלאכות 12"
+    },
+    {
+      "store_id": "71",
+      "store_name": "פרישמן",
+      "chain_name": "טיב טעם",
+      "city": "תל אביב",
+      "address": "פרישמן 13"
+    },
+    {
+      "store_id": "207",
+      "store_name": "יש אור יהודה - אליהו סעדו",
+      "chain_name": "יש",
+      "city": "אור יהודה",
+      "address": "אליהו סעדון 128"
+    },
+    {
+      "store_id": "124",
+      "store_name": "יוניברס בת ים- אורט ישראל",
+      "chain_name": "יש",
+      "city": "בת ים",
+      "address": "אורט ישראל 25"
+    },
+    {
+      "store_id": "314",
+      "store_name": "יש חיפה- צרפת",
+      "chain_name": "יש",
+      "city": "חיפה",
+      "address": "דרך צרפת 11"
+    },
+    {
+      "store_id": "306",
+      "store_name": "יש נוה שאנן חיפה- חניתה",
+      "chain_name": "יש",
+      "city": "חיפה",
+      "address": "רח' חניתה 64"
+    },
+    {
+      "store_id": "840",
+      "store_name": "גוד מרקט חריש",
+      "chain_name": "יש",
+      "city": "חריש",
+      "address": "1 אלה"
+    },
+    {
+      "store_id": "329",
+      "store_name": "יש  יוקנעם עילית- היובלים",
+      "chain_name": "יש",
+      "city": "יוקנעם",
+      "address": "מ.מסחרי יקנעם על"
+    },
+    {
+      "store_id": "134",
+      "store_name": "יוניברס מודיעין- ישפרו סנטר",
+      "chain_name": "יש",
+      "city": "מודיעין",
+      "address": "ישפרו סנטר"
+    },
+    {
+      "store_id": "106",
+      "store_name": "יוניברס נס ציונה - הפטיש",
+      "chain_name": "יש",
+      "city": "נס ציונה",
+      "address": "הפטיש 8,א.ת."
+    },
+    {
+      "store_id": "15",
+      "store_name": "יש פ\"ת- רוטשילד",
+      "chain_name": "יש",
+      "city": "פתח תקווה",
+      "address": "רוטשילד79"
+    },
+    {
+      "store_id": "307",
+      "store_name": "יש קרית אתא- זבולון",
+      "chain_name": "יש",
+      "city": "קרית אתא",
+      "address": " רח.זבולון 4"
+    },
+    {
+      "store_id": "214",
+      "store_name": "יוניברס קרית גת- מלכי ישראל",
+      "chain_name": "יש",
+      "city": "קרית גת",
+      "address": "מלכי ישראל 178"
+    },
+    {
+      "store_id": "288",
+      "store_name": "יש רחובות- סירני",
+      "chain_name": "יש",
+      "city": "רחובות",
+      "address": "חיים סרני 1"
+    },
+    {
+      "store_id": "609",
+      "store_name": "יש חסד אלעד-ניסים גאון",
+      "chain_name": "יש חסד",
+      "city": "אלעד",
+      "address": "ניסים גאון 79"
+    },
+    {
+      "store_id": "73",
+      "store_name": "יש חסד אשדוד",
+      "chain_name": "יש חסד",
+      "city": "אשדוד",
+      "address": "חנה סנש 9"
+    },
+    {
+      "store_id": "300",
+      "store_name": "יש חסד בארות יצחק- פאוור",
+      "chain_name": "יש חסד",
+      "city": "בארות יצחק",
+      "address": "בארות יצחק"
+    },
+    {
+      "store_id": "593",
+      "store_name": "יש חסד באר טוביה",
+      "chain_name": "יש חסד",
+      "city": "באר טוביה",
+      "address": "אזור התעשייה"
+    },
+    {
+      "store_id": "133",
+      "store_name": "יש חסד ביתר עילית-  הר\"ן",
+      "chain_name": "יש חסד",
+      "city": "ביתר עילית",
+      "address": "הר\"ן 6 פינת פנים המאירים"
+    },
+    {
+      "store_id": "606",
+      "store_name": "יש חסד בית שמש- מ. מסחרי",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "מרכז מסחרי רמה א"
+    },
+    {
+      "store_id": "234",
+      "store_name": "יש חסד רסידו",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "נהר הירדן"
+    },
+    {
+      "store_id": "765",
+      "store_name": "יש חסד בן איש חי",
+      "chain_name": "יש חסד",
+      "city": "בית שמש",
+      "address": "43 בן אישחי"
+    },
+    {
+      "store_id": "611",
+      "store_name": "יש חסד בני ברק- השומר",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "השומר 10"
+    },
+    {
+      "store_id": "219",
+      "store_name": "יש חסד בני ברק- עזרא",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "עזרה בני ברק"
+    },
+    {
+      "store_id": "295",
+      "store_name": "יש חסד בני ברק-שלמה המלך",
+      "chain_name": "יש חסד",
+      "city": "בני ברק",
+      "address": "שלמה המלך   12"
+    },
+    {
+      "store_id": "111",
+      "store_name": "יש חסד טבריה עלית-לב האג",
+      "chain_name": "יש חסד",
+      "city": "טבריה",
+      "address": "לב האגם 10"
+    },
+    {
+      "store_id": "496",
+      "store_name": "יש חסד כנפי נשרים",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "כנפי נשרים 24"
+    },
+    {
+      "store_id": "610",
+      "store_name": "יש חסד ירושלים- רמת שלמה",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "ברכת אברהם 22"
+    },
+    {
+      "store_id": "364",
+      "store_name": "יש חסד בית וגן",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "1 זנגוויל"
+    },
+    {
+      "store_id": "608",
+      "store_name": "יש חסד ירושלים-קרית שאול",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "נאג'רה 2"
+    },
+    {
+      "store_id": "81",
+      "store_name": "יש חסד מודיעין עלית דרום",
+      "chain_name": "יש חסד",
+      "city": "מודיעין עילית",
+      "address": "שערי תשובה 3"
+    },
+    {
+      "store_id": "499",
+      "store_name": "יש חסד עפולה עילית",
+      "chain_name": "יש חסד",
+      "city": "עפולה",
+      "address": "24 פנחס רוזן"
+    },
+    {
+      "store_id": "349",
+      "store_name": "יש חסד צפת- כנען",
+      "chain_name": "יש חסד",
+      "city": "צפת",
+      "address": "הר כנען"
+    },
+    {
+      "store_id": "607",
+      "store_name": "יש חסד מודיעין עלי-ק.ספר",
+      "chain_name": "יש חסד",
+      "city": "קרית ספר",
+      "address": "אבני נזר 46"
+    },
+    {
+      "store_id": "62",
+      "store_name": "יש חסד רכסים",
+      "chain_name": "יש חסד",
+      "city": "רכסים",
+      "address": "הכלניות 49"
+    },
+    {
+      "store_id": "2",
+      "store_name": "יוחננוף ישן",
+      "chain_name": "מ. יוחננוף ובניו",
+      "city": "0.0",
+      "address": "unknown"
+    },
+    {
+      "store_id": "17",
+      "store_name": "מודיעין ישפרו",
+      "chain_name": "מ. יוחננוף ובניו",
+      "city": "מודיעין",
+      "address": "unknown"
+    },
+    {
+      "store_id": "146",
+      "store_name": "מישור אדומים פיק אפ",
+      "chain_name": "מ. יוחננוף ובניו",
+      "city": "מישור אדומים",
+      "address": "unknown"
+    },
+    {
+      "store_id": "46",
+      "store_name": "מישור אדומים",
+      "chain_name": "מ. יוחננוף ובניו",
+      "city": "מישור אדומים",
+      "address": "unknown"
+    },
+    {
+      "store_id": "38",
+      "store_name": "קלישר נתיב החסד",
+      "chain_name": "נתיב החסד- סופר חסד בע\"מ",
+      "city": "בני ברק",
+      "address": "קלישר 17"
+    },
+    {
+      "store_id": "205",
+      "store_name": "סופר יודה ישעיהו",
+      "chain_name": "סופר יודה",
+      "city": "תל אביב",
+      "address": "ישעיהו 1"
+    },
+    {
+      "store_id": "70",
+      "store_name": "סיטי מרקט כרמי גת, שד' לכיש 181 ק.גת",
+      "chain_name": "סיטי מרקט",
+      "city": "לכיש",
+      "address": "unknown"
+    },
+    {
+      "store_id": "48",
+      "store_name": "שוורץ ושיש אינווסמנט בע\"מ, קריניצי 7 רמת גן",
+      "chain_name": "סיטי מרקט",
+      "city": "רמת גן",
+      "address": "unknown"
+    },
+    {
+      "store_id": "47",
+      "store_name": "שוורץ ושיש אינווסמנט בע\"מ, רש\"י 33 רמת גן",
+      "chain_name": "סיטי מרקט",
+      "city": "רמת גן",
+      "address": "unknown"
+    },
+    {
+      "store_id": "40",
+      "store_name": "מתוק בשוק הכרמל בע\"מ, קלישר 3 תל אביב",
+      "chain_name": "סיטי מרקט",
+      "city": "תל אביב",
+      "address": "unknown"
+    },
+    {
+      "store_id": "266",
+      "store_name": "פז נויה - ישראל אדהנ",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "147.0",
+      "address": "כביש 40 בכניסה לקיבוץ גבעת ברנר"
+    },
+    {
+      "store_id": "612",
+      "store_name": "נתיבות החדשה -ישועה",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "246.0",
+      "address": "בעלי המלאכה 97"
+    },
+    {
+      "store_id": "190",
+      "store_name": "קרית שרת - סרגיי מיש",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "6600.0",
+      "address": "6 האורגים"
+    },
+    {
+      "store_id": "329",
+      "store_name": "קרית אתא - שי גביש",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "6800.0",
+      "address": "דרך דשנים 18,כניסה מערבית לקרית אתא"
+    },
+    {
+      "store_id": "248",
+      "store_name": "מכון הרישוי - עבד אל",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "7400.0",
+      "address": "גיבורי ישראל א.ת. פולג"
+    },
+    {
+      "store_id": "270",
+      "store_name": "פז אלישמע  -אייל לבי",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "אלישמע",
+      "address": "כביש 40 מול מושב אלישמע,בכניסה המזר"
+    },
+    {
+      "store_id": "193",
+      "store_name": "עד הלום - אריק אקריש",
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "city": "אשדוד",
+      "address": "א.ת. עד-הלום כביש אשדוד אשקלון"
+    }
+  ],
+  "5_jerusalem_chains": [
+    {
+      "chain_name": "פז קמעונאות ואנרגיה בע\"מ",
+      "count": 31
+    },
+    {
+      "chain_name": "זול ובגדול בע\"מ",
+      "count": 24
+    },
+    {
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "count": 19
+    },
+    {
+      "chain_name": "רמי לוי שיווק השקמה",
+      "count": 11
+    },
+    {
+      "chain_name": "שופרסל שלי",
+      "count": 8
+    },
+    {
+      "chain_name": "סופר ספיר בע\"מ",
+      "count": 6
+    },
+    {
+      "chain_name": "שופרסל דיל",
+      "count": 5
+    },
+    {
+      "chain_name": "שפע ברכת השם בע\"מ",
+      "count": 5
+    },
+    {
+      "chain_name": "נתיב החסד- סופר חסד בע\"מ",
+      "count": 5
+    },
+    {
+      "chain_name": "יש חסד",
+      "count": 4
+    },
+    {
+      "chain_name": "אושר עד",
+      "count": 3
+    },
+    {
+      "chain_name": "BE",
+      "count": 2
+    },
+    {
+      "chain_name": "מ. יוחננוף ובניו",
+      "count": 2
+    },
+    {
+      "chain_name": "שופרסל אקספרס",
+      "count": 2
+    },
+    {
+      "chain_name": "וולט מרקט",
+      "count": 2
+    },
+    {
+      "chain_name": "שופרסל",
+      "count": 2
+    },
+    {
+      "chain_name": "גוד מרקט",
+      "count": 1
+    },
+    {
+      "chain_name": "סופר יודה",
+      "count": 1
+    },
+    {
+      "chain_name": "Dor Alon",
+      "count": 1
+    }
+  ],
+  "6_yesh_hesed_jerusalem": [
+    {
+      "store_id": "364",
+      "store_name": "יש חסד בית וגן",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "1 זנגוויל"
+    },
+    {
+      "store_id": "608",
+      "store_name": "יש חסד ירושלים-קרית שאול",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "נאג'רה 2"
+    },
+    {
+      "store_id": "610",
+      "store_name": "יש חסד ירושלים- רמת שלמה",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "ברכת אברהם 22"
+    },
+    {
+      "store_id": "496",
+      "store_name": "יש חסד כנפי נשרים",
+      "chain_name": "יש חסד",
+      "city": "ירושלים",
+      "address": "כנפי נשרים 24"
+    }
+  ],
+  "7_available_price_tables": [
+    "products"
+  ],
+  "8_prices_per_yesh_hesed_store": "no prices table",
+  "9_remaining_raw_shufersal": [
+    {
+      "store_id": "161",
+      "store_name": "המפיץ סיטונאות אשדוד",
+      "chain_name": "שופרסל",
+      "city": "אשדוד"
+    },
+    {
+      "store_id": "672",
+      "store_name": "סניף אשדוד סיטי",
+      "chain_name": "שופרסל",
+      "city": "אשדוד"
+    },
+    {
+      "store_id": "737",
+      "store_name": "המפיץ סיטונאות באר שבע",
+      "chain_name": "שופרסל",
+      "city": "באר שבע"
+    },
+    {
+      "store_id": "631",
+      "store_name": "סניף וולפסון",
+      "chain_name": "שופרסל",
+      "city": "חולון"
+    },
+    {
+      "store_id": "772",
+      "store_name": "גודמרקט מאה שערים",
+      "chain_name": "שופרסל",
+      "city": "ירושלים"
+    },
+    {
+      "store_id": "448",
+      "store_name": "שערי רווחה",
+      "chain_name": "שופרסל",
+      "city": "ירושלים"
+    },
+    {
+      "store_id": "250",
+      "store_name": "קריית שמונה",
+      "chain_name": "שופרסל",
+      "city": "נס ציונה"
+    },
+    {
+      "store_id": "730",
+      "store_name": "חנות עובדים מרכז שילוח קדימה",
+      "chain_name": "שופרסל",
+      "city": "קדימה"
+    },
+    {
+      "store_id": "660",
+      "store_name": "סניף רמת השרון",
+      "chain_name": "שופרסל",
+      "city": "רמת השרון"
+    },
+    {
+      "store_id": "322",
+      "store_name": "גן העיר תל אביב",
+      "chain_name": "שופרסל",
+      "city": "תל אביב"
+    },
+    {
+      "store_id": "656",
+      "store_name": "סניף בן יהודה",
+      "chain_name": "שופרסל",
+      "city": "תל אביב"
+    }
+  ],
+  "10_shufersal_family_full": [
+    {
+      "chain_name": "BE",
+      "count": 95
+    },
+    {
+      "chain_name": "גוד מרקט",
+      "count": 6
+    },
+    {
+      "chain_name": "יוניברס",
+      "count": 24
+    },
+    {
+      "chain_name": "יש",
+      "count": 12
+    },
+    {
+      "chain_name": "יש חסד",
+      "count": 21
+    },
+    {
+      "chain_name": "שופרסל",
+      "count": 11
+    },
+    {
+      "chain_name": "שופרסל ONLINE",
+      "count": 1
+    },
+    {
+      "chain_name": "שופרסל אקספרס",
+      "count": 94
+    },
+    {
+      "chain_name": "שופרסל דיל",
+      "count": 79
+    },
+    {
+      "chain_name": "שופרסל שלי",
+      "count": 80
+    }
+  ],
+  "11_yesh_hesed_wrong_chain": []
+}

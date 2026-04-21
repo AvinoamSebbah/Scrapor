@@ -1,0 +1,162 @@
+{
+  "all_tables": [
+    "auth_tokens",
+    "maintenance_state",
+    "processed_files",
+    "product_prices",
+    "product_search_stats",
+    "products",
+    "promotion_items",
+    "promotion_store_items",
+    "promotions",
+    "shopping_lists",
+    "store_promotions_cache",
+    "stores",
+    "top_promotions_cache",
+    "user_carts",
+    "user_preferences",
+    "users"
+  ],
+  "products_columns": [
+    {
+      "col": "id",
+      "type": "integer"
+    },
+    {
+      "col": "item_code",
+      "type": "character varying"
+    },
+    {
+      "col": "item_name",
+      "type": "character varying"
+    },
+    {
+      "col": "manufacturer_name",
+      "type": "character varying"
+    },
+    {
+      "col": "manufacture_country",
+      "type": "character varying"
+    },
+    {
+      "col": "manufacturer_item_description",
+      "type": "character varying"
+    },
+    {
+      "col": "created_at",
+      "type": "timestamp without time zone"
+    },
+    {
+      "col": "updated_at",
+      "type": "timestamp without time zone"
+    },
+    {
+      "col": "search_idx_col",
+      "type": "tsvector"
+    }
+  ],
+  "stores_columns": [
+    {
+      "col": "id",
+      "type": "integer"
+    },
+    {
+      "col": "chain_id",
+      "type": "character varying"
+    },
+    {
+      "col": "chain_name",
+      "type": "character varying"
+    },
+    {
+      "col": "last_update_date",
+      "type": "character varying"
+    },
+    {
+      "col": "last_update_time",
+      "type": "character varying"
+    },
+    {
+      "col": "store_id",
+      "type": "character varying"
+    },
+    {
+      "col": "bikoret_no",
+      "type": "character varying"
+    },
+    {
+      "col": "store_type",
+      "type": "character varying"
+    },
+    {
+      "col": "store_name",
+      "type": "character varying"
+    },
+    {
+      "col": "address",
+      "type": "character varying"
+    },
+    {
+      "col": "city",
+      "type": "character varying"
+    },
+    {
+      "col": "zip_code",
+      "type": "character varying"
+    },
+    {
+      "col": "created_at",
+      "type": "timestamp without time zone"
+    },
+    {
+      "col": "updated_at",
+      "type": "timestamp without time zone"
+    }
+  ],
+  "products_sample_cols": [
+    "id",
+    "item_code",
+    "item_name",
+    "manufacturer_name",
+    "manufacture_country",
+    "manufacturer_item_description",
+    "created_at",
+    "updated_at",
+    "search_idx_col"
+  ],
+  "products_sample": [
+    {
+      "id": "13112708",
+      "item_code": "7290018677780",
+      "item_name": "ש.שועל ומחית שקדים ע",
+      "manufacturer_name": ",",
+      "manufacture_country": "לא ידוע",
+      "manufacturer_item_description": "ש.שועל ומחית שקדים עם תפוע/בננה/קיווי",
+      "created_at": "2026-03-24 16:53:42.826687",
+      "updated_at": "2026-04-21 07:09:04.666243",
+      "search_idx_col": "'בננה':12C 'ומחית':3A,8C 'ע':5A 'עם':10C 'קיווי':13C 'ש':1A,6C 'שועל':2A,7C 'שקדים':4A,9C 'תפוע':11C"
+    },
+    {
+      "id": "13162684",
+      "item_code": "4820145372673",
+      "item_name": "ריבת דובדבנים 395 גר",
+      "manufacturer_name": ",",
+      "manufacture_country": "לא ידוע",
+      "manufacturer_item_description": "ריבת דובדבנים 395 גר",
+      "created_at": "2026-03-24 16:55:31.416788",
+      "updated_at": "2026-04-21 03:42:26.386768",
+      "search_idx_col": "'395':3A,7C 'גר':4A,8C 'דובדבנים':2A,6C 'ריבת':1A,5C"
+    },
+    {
+      "id": "13160891",
+      "item_code": "4751024270028",
+      "item_name": "מקלוני גבינה קשה מעו",
+      "manufacturer_name": ",",
+      "manufacture_country": "לא ידוע",
+      "manufacturer_item_description": "מקלוני גבינה קשה מעושנת 28% 100 גר",
+      "created_at": "2026-03-24 16:55:24.664262",
+      "updated_at": "2026-04-21 07:09:04.666243",
+      "search_idx_col": "'100':10C '28':9C 'גבינה':2A,6C 'גר':11C 'מעו':4A 'מעושנת':8C 'מקלוני':1A,5C 'קשה':3A,7C"
+    }
+  ]
+}

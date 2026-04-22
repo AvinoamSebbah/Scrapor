@@ -888,10 +888,10 @@ def update_functions():
             WHERE c.window_hours = v_window_hours
               AND c.scope_type = 'store'
               AND c.has_image IS TRUE
-              AND (p_city IS NULL OR p_city = '' OR c.city ILIKE p_city || '%')
+              AND (p_city IS NULL OR p_city = '' OR c.city = p_city)
               AND (v_chain_id = '' OR c.chain_id = v_chain_id)
               AND (v_store_id = '' OR c.store_id = v_store_id)
-              AND (p_chain_name IS NULL OR p_chain_name = '' OR c.chain_name ILIKE p_chain_name)
+              AND (p_chain_name IS NULL OR p_chain_name = '' OR lower(c.chain_name) = lower(p_chain_name))
           ),
           best_per_item AS (
             -- Pour chaque item_code, garder le meilleur magasin (smart_score DESC)

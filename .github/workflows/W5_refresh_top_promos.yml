@@ -18,8 +18,8 @@ on:
         required: false
         default: ''
 
-# Indépendant du pipeline scrape — peut tourner en même temps que W1/W2/W3.
-# Un seul refresh à la fois (pas de doublon si déclenché manuellement pendant le cron).
+# Un seul refresh à la fois.
+# Si un refresh est déjà en queue, la nouvelle tentative le remplace (évite l'accumulation).
 concurrency:
   group: refresh-top-promotions
   cancel-in-progress: false
@@ -41,6 +41,39 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Wait for active W3 uploads to finish
+        # Attend que tous les W3 (uploads par magasin) soient terminés avant de
+        # toucher top_promotions_cache — évite les deadlocks DB en cas d'écriture
+        # concurrente sur les tables sources pendant le refresh.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          MAX_WAIT=7200   # 2h max d'attente
+          ELAPSED=0
+          INTERVAL=60
+          echo "⏳  Vérification des W3 (uploads magasin) actifs ou en file…"
+          while true; do
+            IN_PROGRESS=$(gh api "/repos/${{ github.repository }}/actions/runs?status=in_progress&per_page=100" \
+              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
+            QUEUED=$(gh api "/repos/${{ github.repository }}/actions/runs?status=queued&per_page=100" \
+              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
+            WAITING=$(gh api "/repos/${{ github.repository }}/actions/runs?status=waiting&per_page=100" \
+              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
+            TOTAL=$((IN_PROGRESS + QUEUED + WAITING))
+            if [ "$TOTAL" = "0" ]; then
+              echo "✅  Aucun W3 actif — démarrage du refresh."
+              break
+            fi
+            echo "   ${IN_PROGRESS} W3 en cours · ${QUEUED} en file · ${WAITING} en attente — retry dans ${INTERVAL}s (${ELAPSED}s écoulés)"
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              echo "❌  Timeout (${MAX_WAIT}s) en attendant la fin des W3 — abandon du refresh."
+              exit 1
+            fi
+          done
 
       - name: Refresh top promotions cache
         env:

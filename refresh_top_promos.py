@@ -301,28 +301,35 @@ def _check_images(conn, window_hours: int, include_no_image: bool) -> tuple:
                 image_map.setdefault(code, True)  # ne pas pénaliser si réseau KO
 
         # Mise à jour DB — autocommit=True donc chaque execute est son propre commit
+        # Chaque valeur (TRUE / FALSE) est traitée séparément pour éviter les
+        # re-exécutions inutiles en cas de retry : si UPDATE TRUE a déjà committé,
+        # on ne le relance pas une 2ème fois.
         batch_with = [c for c in batch if image_map.get(c) is True]
         batch_without = [c for c in batch if image_map.get(c) is False]
-        for _attempt in range(3):
-            try:
-                with conn.cursor() as cur:
-                    if batch_with:
+        for items, flag in ((batch_with, True), (batch_without, False)):
+            if not items:
+                continue
+            for _attempt in range(3):
+                try:
+                    with conn.cursor() as cur:
                         cur.execute(
-                            "UPDATE top_promotions_cache SET has_image = TRUE WHERE window_hours = %s AND item_code = ANY(%s)",
-                            (window_hours, batch_with),
+                            "UPDATE top_promotions_cache SET has_image = %s"
+                            " WHERE window_hours = %s AND item_code = ANY(%s)",
+                            (flag, window_hours, items),
                         )
-                    if batch_without:
-                        cur.execute(
-                            "UPDATE top_promotions_cache SET has_image = FALSE WHERE window_hours = %s AND item_code = ANY(%s)",
-                            (window_hours, batch_without),
-                        )
-                break  # succes
-            except psycopg2.errors.DeadlockDetected:
-                if _attempt < 2:
-                    conn = _connect(_db_url())
-                    conn.autocommit = True
-                else:
-                    raise
+                    break  # succès
+                except psycopg2.errors.DeadlockDetected:
+                    if _attempt < 2:
+                        # Ferme proprement l'ancienne connexion avant d'en ouvrir une nouvelle
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        time.sleep(1 + _attempt)  # backoff court avant retry
+                        conn = _connect(_db_url())
+                        conn.autocommit = True
+                    else:
+                        raise
 
     with_image = sum(1 for v in image_map.values() if v)
     without_image = sum(1 for v in image_map.values() if not v)
@@ -427,8 +434,19 @@ def main():
     candidate_top_n = args.top_n if args.skip_image_check else args.top_n * CANDIDATE_FACTOR
 
     print(f"🔌  Connexion à la DB…")
-    conn = _connect(_db_url())
+    db_url = _db_url()
+    conn = _connect(db_url)
     print("✅  Connecté (transaction manuelle).")
+
+    # ── Lock exclusif au niveau session PostgreSQL ───────────────────────────
+    # Empêche toute exécution simultanée (double cron, run manuel + cron, etc.).
+    # Lock ID 55555 est réservé pour les opérations bulk sur top_promotions_cache.
+    # pg_advisory_lock bloque jusqu'à ce que le verrou soit libre.
+    print("🔒  Acquisition du lock exclusif (pg_advisory_lock 55555)…")
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(55555)")
+    print("🔒  Lock acquis.")
+
     if not args.skip_image_check:
         print(f"📡  Backend images : {BACKEND_API_URL}")
 

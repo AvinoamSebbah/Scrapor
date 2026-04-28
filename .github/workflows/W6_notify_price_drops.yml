@@ -1,0 +1,57 @@
+name: "W6 · Price-Drop Notifications"
+
+# Triggered after W2 (main scrape) completes, once all store data is in DB.
+# Also manually triggerable for testing.
+#
+# Flow: W2 (scrape all stores + dispatches W3s) → W6 (notify users)
+
+on:
+  workflow_run:
+    workflows:
+      - "W2 · Scrape"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (set RESEND_API_KEY to empty to skip emails)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: price-drop-notifications
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: "Send price-drop emails"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Only run if W5 succeeded (or manual trigger)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run price-drop notifier
+        env:
+          PYTHONUNBUFFERED: '1'
+          PYTHONIOENCODING: 'utf-8'
+          DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          SITE_URL: 'https://agali.live'
+        run: python notify_price_drops.py

@@ -1,16 +1,12 @@
 name: "W6 · Price-Drop Notifications"
 
-# Triggered after W2 (main scrape) completes, once all store data is in DB.
+# Triggered explicitly by W2's "wait-for-w3s" job after ALL W3 uploads finish.
+# workflow_run is NOT used because it only fires from the default branch.
 # Also manually triggerable for testing.
 #
-# Flow: W2 (scrape all stores + dispatches W3s) → W6 (notify users)
+# Flow: W2 (scrape + dispatch W3s + wait-for-w3s → dispatch W6) → W6 (notify users)
 
 on:
-  workflow_run:
-    workflows:
-      - "W2 · Scrape"
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       dry_run:
@@ -27,11 +23,6 @@ jobs:
     name: "Send price-drop emails"
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
-    # Only run if W5 succeeded (or manual trigger)
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - uses: actions/checkout@v4

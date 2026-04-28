@@ -215,3 +215,46 @@ jobs:
             --ref ${{ github.ref_name }} \
             -f scrape_run_id=${{ github.run_id }} \
             -f store=${{ matrix.store }}
+
+  # --------------------------------------------------------------------------
+  # Wait for all dispatched W3 runs to finish, then explicitly dispatch W6.
+  # workflow_run is NOT used for W6 (only fires from default branch).
+  # --------------------------------------------------------------------------
+  wait-for-w3s:
+    name: "Wait for all W3 uploads to finish"
+    needs: [scrape]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Poll until no W3 run is pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Waiting for all W3_upload runs to complete..."
+          for i in $(seq 1 60); do
+            PENDING=$(gh run list \
+              --repo ${{ github.repository }} \
+              --workflow W3_upload.yml \
+              --limit 100 \
+              --json status \
+              --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length')
+
+            if [ "$PENDING" -eq 0 ]; then
+              echo "All W3 runs complete (attempt $i)."
+              exit 0
+            fi
+
+            echo "W3 pending=$PENDING. Waiting 60s... (attempt $i/60)"
+            sleep 60
+          done
+          echo "Timeout after 60 min waiting for W3 runs. Proceeding anyway."
+          exit 0
+
+      - name: Dispatch W6 price-drop notifications
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run W6_notify_price_drops.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }}

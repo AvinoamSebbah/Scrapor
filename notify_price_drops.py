@@ -376,7 +376,7 @@ def main():
 
             # ── 5. Fetch product names for email ──────────────────────────────
             item_codes = list({o["item_code"] for o in observations})
-            placeholders = ", ".join(f"${i+1}" for i in range(len(item_codes)))
+            placeholders = ", ".join(["%s"] * len(item_codes))
             cur.execute(
                 f"SELECT item_code, item_name FROM products WHERE item_code IN ({placeholders})",
                 item_codes,

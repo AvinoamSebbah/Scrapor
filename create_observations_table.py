@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS observations (
   city                TEXT NOT NULL,
   store_id            INTEGER,
   min_discount_pct    DECIMAL(5,2) NOT NULL,
+  base_price          DECIMAL(10,2),
+  target_price        DECIMAL(10,2),
   last_notified_price DECIMAL(10,2),
   last_notified_at    TIMESTAMPTZ,
   promo_expires_at    TIMESTAMPTZ,
@@ -32,6 +34,10 @@ CREATE TABLE IF NOT EXISTS observations (
   CONSTRAINT observations_status_check CHECK (status IN ('active', 'paused', 'stopped')),
   CONSTRAINT observations_user_product_city_unique UNIQUE (user_id, product_id, city)
 );
+
+-- Add columns if they don't exist yet (idempotent migration)
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS base_price   DECIMAL(10,2);
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS target_price DECIMAL(10,2);
 
 CREATE INDEX IF NOT EXISTS idx_observations_item_city
   ON observations (item_code, city);

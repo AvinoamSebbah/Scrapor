@@ -243,9 +243,19 @@ def build_html_email(user_name: str, lang: str, products: list[dict]) -> str:
         product_url = f"{SITE_URL}/product/{p['item_code']}"
         img_url = cloudinary_url(p["item_code"])
 
-        # ── Store rows — always RTL: logo on right, price on left ─────────────
-        store_rows = ""
+        # ── Group stores by chain — keep best (lowest) promo per chain ──────
+        from collections import defaultdict as _dd
+        chains_map: dict = _dd(lambda: {"promo_price": float("inf"), "store": None})
         for store in p["stores"]:
+            key = store.get("chain_id") or store["chain_name"]
+            if store["promo_price"] < chains_map[key]["promo_price"]:
+                chains_map[key] = {"promo_price": store["promo_price"], "store": store}
+        # Sort cheapest first
+        chain_entries = sorted(chains_map.values(), key=lambda x: x["promo_price"])
+
+        store_rows = ""
+        for entry in chain_entries:
+            store = entry["store"]
             base = store["store_base_price"]
             promo = store["promo_price"]
             pct = round(((base - promo) / base) * 100) if base > 0 else 0

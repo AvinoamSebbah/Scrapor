@@ -43,6 +43,6 @@ jobs:
           DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          RESEND_FROM_EMAIL: "Agali Alerts <alerts@agali.live>"
           SITE_URL: 'https://agali.live'
         run: python notify_price_drops.py

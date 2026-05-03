@@ -1,7 +1,7 @@
 name: "W5 · Nightly Refresh Top Promotions"
 
 # Rafraîchit top_promotions_cache chaque nuit à 1h UTC.
-# Lance les 3 fenêtres temporelles : 24h, 7 jours, all-time.
+# Lance uniquement le cache all-time.
 # Peut aussi être déclenché manuellement.
 
 on:
@@ -10,13 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       top_n:
-        description: 'Nombre de promos max par magasin (défaut: 200)'
+        description: 'Nombre final de promos max par magasin (défaut: 300)'
         required: false
-        default: '200'
-      window_hours:
-        description: 'Fenêtre unique en heures (vide = toutes : 24h, 168h, all-time)'
-        required: false
-        default: ''
+        default: '300'
 
 # Un seul refresh à la fois.
 # Si un refresh est déjà en queue, la nouvelle tentative le remplace (évite l'accumulation).
@@ -83,10 +79,5 @@ jobs:
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           BACKEND_API_URL: 'https://api.agali.live'
         run: |
-          TOP_N="${{ inputs.top_n || '200' }}"
-          WINDOW="${{ inputs.window_hours }}"
-          if [ -n "$WINDOW" ]; then
-            python refresh_top_promos.py --top-n "$TOP_N" --window-hours "$WINDOW"
-          else
-            python refresh_top_promos.py --top-n "$TOP_N"
-          fi
+          TOP_N="${{ inputs.top_n || '300' }}"
+          python refresh_top_promos.py --top-n "$TOP_N" --window-hours 0

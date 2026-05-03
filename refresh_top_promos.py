@@ -5,10 +5,10 @@ refresh_top_promos.py
 Peuple top_promotions_cache via refresh_top_promotions_cache().
 
 Par défaut le script :
-  1. Génère CANDIDATE_FACTOR × top_n candidats en SQL
+  1. Génère CANDIDATE_FACTOR × top_n candidats all-time en SQL
   2. Vérifie les images via l'API backend (Cloudinary → Pricez → OpenFoodFacts)
   3. Supprime les lignes sans image du cache
-  4. Re-rank les lignes restantes et coupe à top_n
+  4. Re-rank les lignes restantes et recoupe à top_n final
 
 Comportements alternatifs (flags) :
   --include-no-image   : garde les promos sans image mais les met en dernier (après celles avec image)
@@ -19,7 +19,7 @@ Voir docs/image_refresh_flags.md pour plus de détails.
 
 Usage:
     python refresh_top_promos.py
-    python refresh_top_promos.py --window-hours 168 --top-n 200
+    python refresh_top_promos.py --top-n 300
     python refresh_top_promos.py --include-no-image
     python refresh_top_promos.py --skip-image-check --skip-audit
 
@@ -46,9 +46,9 @@ BACKEND_API_URL = os.getenv("BACKEND_API_URL", "https://api.agali.live")
 # pour avoir assez de promos avec images après filtrage.
 CANDIDATE_FACTOR = 4
 
-# Fenêtres temporelles à rafraîchir lors d'un run complet :
-# 24h, 7 jours, 0 = "all time" (toutes promos non-expirées, sans limite de date)
-WINDOWS_TO_REFRESH = [24, 168, 0]
+# Fenêtre unique conservée pour le cache promos :
+# 0 = "all time" (toutes promos non-expirées, sans limite de date)
+WINDOWS_TO_REFRESH = [0]
 
 # Taille maximale des lots envoyés à l'API batch images (limite côté backend = 50).
 IMAGE_BATCH_SIZE = 50
@@ -230,7 +230,7 @@ def _post_audit(conn, window_hours: int):
 # ─── Vérification images via API backend ─────────────────────────────────────
 
 
-def _check_images(conn, window_hours: int, include_no_image: bool) -> tuple:
+def _check_images(conn, window_hours: int, include_no_image: bool, top_n: int) -> tuple:
     """
     1. Récupère tous les item_codes distincts du cache pour window_hours
     2. Envoie des lots de IMAGE_BATCH_SIZE à POST /api/products/images/batch
@@ -354,23 +354,91 @@ def _check_images(conn, window_hours: int, include_no_image: bool) -> tuple:
     else:
         print(f"  Mode --include-no-image : promos sans image conservées (en dernier)")
 
-    # 5 & 6) Re-rank et coupe à top_n par groupe
-    _rerank(conn, window_hours)
+    # 5 & 6) Re-rank et recoupe à top_n par groupe
+    _rerank(conn, window_hours, top_n)
 
     return conn, {"total": total, "with_image": with_image, "without_image": without_image, "deleted": deleted}
 
 
-def _rerank(conn, window_hours: int):
+def _rerank(conn, window_hours: int, top_n: int):
     """
-    Re-numérotote rank_position au sein de chaque groupe
-    (scope_type, city, chain_id, store_id) en mettant
-    has_image=TRUE en premier, puis smart_score DESC.
+    Re-numérote rank_position au sein de chaque groupe
+    (scope_type, city, chain_id, store_id), après avoir recoupé
+    le cache à son volume final utile.
 
     Deux passes pour éviter les collisions de clé primaire :
     1. Passe négative : rank_position = -(new_rank)  (valeurs uniques garanties)
     2. Passe positive : rank_position = ABS(rank_position)
     """
+    standard_limit = max(1, round(top_n * 2 / 3))
+    coupon_limit = max(0, top_n - standard_limit)
+
     with conn.cursor() as cur:
+        # Coupe finale : pour chaque store, on garde 2/3 de promos "normales"
+        # et 1/3 de promos coupon-like. Les scopes legacy non-store restent
+        # bornés à top_n pour ne pas gonfler inutilement le cache.
+        cur.execute(
+            """
+            WITH classified AS (
+                SELECT
+                    ctid,
+                    scope_type,
+                    city,
+                    chain_id,
+                    store_id,
+                    CASE
+                        WHEN scope_type = 'store'
+                          AND COALESCE(promo_kind, 'regular') IN ('coupon', 'club', 'card', 'insurance')
+                        THEN 'coupon_like'
+                        WHEN scope_type = 'store'
+                        THEN 'standard'
+                        ELSE NULL
+                    END AS promo_bucket,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY window_hours, scope_type, city, chain_id, store_id,
+                            CASE
+                                WHEN scope_type = 'store'
+                                  AND COALESCE(promo_kind, 'regular') IN ('coupon', 'club', 'card', 'insurance')
+                                THEN 'coupon_like'
+                                WHEN scope_type = 'store'
+                                THEN 'standard'
+                                ELSE NULL
+                            END
+                        ORDER BY smart_score DESC NULLS LAST, discount_percent DESC NULLS LAST, discount_amount DESC NULLS LAST, updated_at DESC NULLS LAST, item_code ASC
+                    ) AS bucket_rank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY window_hours, scope_type, city, chain_id, store_id
+                        ORDER BY smart_score DESC NULLS LAST, discount_percent DESC NULLS LAST, discount_amount DESC NULLS LAST, updated_at DESC NULLS LAST, item_code ASC
+                    ) AS overall_rank
+                FROM top_promotions_cache
+                WHERE window_hours = %s
+            ),
+            keepers AS (
+                SELECT ctid
+                FROM classified
+                WHERE (
+                    scope_type = 'store'
+                    AND (
+                        (promo_bucket = 'standard' AND bucket_rank <= %s)
+                        OR (promo_bucket = 'coupon_like' AND bucket_rank <= %s)
+                    )
+                )
+                OR (
+                    scope_type <> 'store'
+                    AND overall_rank <= %s
+                )
+            )
+            DELETE FROM top_promotions_cache t
+            WHERE t.window_hours = %s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM keepers k
+                WHERE k.ctid = t.ctid
+              )
+            """,
+            (window_hours, standard_limit, coupon_limit, top_n, window_hours),
+        )
+
         # Passe 1 : appliquer les nouveaux rangs en négatif
         cur.execute(
             """
@@ -406,7 +474,7 @@ def _rerank(conn, window_hours: int):
             (window_hours,),
         )
     conn.commit()
-    print("  Re-rank effectué")
+    print(f"  Re-rank effectué (quota final: {standard_limit} standard + {coupon_limit} coupon-like)")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -414,11 +482,11 @@ def _rerank(conn, window_hours: int):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Refresh top_promotions_cache (7 jours de données)."
+        description="Refresh top_promotions_cache (all-time uniquement)."
     )
-    parser.add_argument("--window-hours", type=int, default=None,
-                        help="Fenêtre horaire unique (0=all-time). Si omis, lance toutes les fenêtres (24h, 168h, all-time).")
-    parser.add_argument("--top-n", type=int, default=200)
+    parser.add_argument("--window-hours", type=int, default=0,
+                        help="Fenêtre horaire unique. 0=all-time (mode recommandé et unique en prod).")
+    parser.add_argument("--top-n", type=int, default=300)
     parser.add_argument("--skip-audit", action="store_true",
                         help="Sauter l'audit pré-refresh (plus rapide)")
     parser.add_argument("--skip-image-check", action="store_true",
@@ -429,7 +497,7 @@ def main():
                         help="Faire uniquement le check image sur le cache existant (sans refresh SQL)")
     args = parser.parse_args()
 
-    # Fenêtres à traiter : une seule si --window-hours spécifié, sinon toutes
+    # Fenêtre à traiter : all-time uniquement par défaut.
     windows = [args.window_hours] if args.window_hours is not None else WINDOWS_TO_REFRESH
 
     # Quand on vérifie les images, générer plus de candidats SQL
@@ -458,7 +526,7 @@ def main():
             for window in windows:
                 label = "all-time" if window == 0 else f"{window}h"
                 print(f"\n  ── Fenêtre {label} ──")
-                conn, stats = _check_images(conn, window, args.include_no_image)
+                conn, stats = _check_images(conn, window, args.include_no_image, args.top_n)
                 print(
                     f"  📸  Images : {stats['with_image']}/{stats['total']} avec image"
                     + (f", {stats['deleted']} sans image supprimées" if stats['deleted'] else "")
@@ -482,11 +550,13 @@ def main():
                     print(f"\n⚠️  Aucune ligne insérée pour {label}.")
                 else:
                     if not args.skip_image_check:
-                        conn, stats = _check_images(conn, window, args.include_no_image)
+                        conn, stats = _check_images(conn, window, args.include_no_image, args.top_n)
                         print(
                             f"\n  📸  Images : {stats['with_image']}/{stats['total']} avec image"
                             + (f", {stats['deleted']} sans image supprimées" if stats['deleted'] else "")
                         )
+                    else:
+                        _rerank(conn, window, args.top_n)
                     _post_audit(conn, window)
 
     except Exception as e:

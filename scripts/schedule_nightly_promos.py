@@ -86,10 +86,10 @@ def run_refresh() -> bool:
     try:
         env = os.environ.copy()
         result = subprocess.run(
-            [sys.executable, str(REFRESH_TOP_SCRIPT)],
+            [sys.executable, str(REFRESH_TOP_SCRIPT), "--top-n", "300", "--window-hours", "0"],
             env=env,
             capture_output=False,
-            timeout=600,
+            timeout=1800,
         )
         if result.returncode == 0:
             log(f"✅  {REFRESH_TOP_SCRIPT.name} terminé avec succès.")

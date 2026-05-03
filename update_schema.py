@@ -714,17 +714,19 @@ def update_schema():
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION refresh_top_promotions_cache(
-          p_window_hours INT DEFAULT 24,
-          p_top_n INT DEFAULT 200
+          p_window_hours INT DEFAULT 0,
+          p_top_n INT DEFAULT 300
         )
         RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
         DECLARE
           v_window_hours INT := CASE
-            WHEN p_window_hours IS NULL THEN 24
+            WHEN p_window_hours IS NULL THEN 0
             WHEN p_window_hours <= 0 THEN 0
             ELSE p_window_hours
           END;
-          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 800);
+          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 300), 1), 2000);
+          v_store_standard_quota INT := GREATEST(1, CAST(ROUND(v_top_n * 2.0 / 3.0) AS INT));
+          v_store_coupon_quota INT := GREATEST(0, v_top_n - GREATEST(1, CAST(ROUND(v_top_n * 2.0 / 3.0) AS INT)));
           affected_rows INTEGER := 0;
         BEGIN
           CREATE TEMP TABLE _img_state_backup ON COMMIT DROP AS
@@ -855,7 +857,7 @@ def update_schema():
           limited_store_promos AS (
             SELECT *
             FROM ranked_store_items
-            WHERE store_rank <= 2000
+            WHERE store_rank <= GREATEST(v_top_n * 4, 4000)
           ),
           scored_raw AS (
             SELECT
@@ -1066,7 +1068,14 @@ def update_schema():
               d.promotion_end_date,
               d.updated_at
             FROM store_bucketed d
-            WHERE d.bucket_rank <= 120
+            WHERE (
+              d.store_bucket = 'standard'
+              AND d.bucket_rank <= v_store_standard_quota
+            )
+            OR (
+              d.store_bucket = 'coupon_like'
+              AND d.bucket_rank <= v_store_coupon_quota
+            )
           )
           INSERT INTO top_promotions_cache (
             window_hours,
@@ -1163,7 +1172,7 @@ def update_schema():
           p_city TEXT,
           p_chain_id TEXT DEFAULT NULL,
           p_store_id TEXT DEFAULT NULL,
-          p_window_hours INT DEFAULT 24,
+          p_window_hours INT DEFAULT 0,
           p_limit INT DEFAULT 50,
           p_offset INT DEFAULT 0
         )
@@ -1194,7 +1203,7 @@ def update_schema():
           v_chain_id TEXT := COALESCE(p_chain_id, '');
           v_store_id TEXT := COALESCE(p_store_id, '');
           v_window_hours INT := CASE
-            WHEN p_window_hours IS NULL THEN 24
+            WHEN p_window_hours IS NULL THEN 0
             WHEN p_window_hours <= 0 THEN 0
             ELSE p_window_hours
           END;

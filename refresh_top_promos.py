@@ -243,20 +243,22 @@ def _check_images(conn, window_hours: int, include_no_image: bool) -> tuple:
     """
     _banner("Vérification images")
 
-    # 1) Récupère les item_codes du cache
+    # 1) Récupère tous les item_codes du cache.
+    # On revalide aussi les anciens TRUE: sinon un faux positif historique
+    # peut survivre indéfiniment alors que l'URL image est morte aujourd'hui.
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT DISTINCT item_code
             FROM top_promotions_cache
-            WHERE window_hours = %s AND has_image IS NULL
+            WHERE window_hours = %s
             """,
             (window_hours,),
         )
         rows = cur.fetchall()
     item_codes = [r["item_code"] for r in rows]
     total = len(item_codes)
-    print(f"  {total} item_codes distincts à vérifier (has_image IS NULL)…")
+    print(f"  {total} item_codes distincts à revalider…")
 
     if total == 0:
         return conn, {"total": 0, "with_image": 0, "without_image": 0, "deleted": 0}

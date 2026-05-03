@@ -724,13 +724,12 @@ def update_schema():
             WHEN p_window_hours <= 0 THEN 0
             ELSE p_window_hours
           END;
-          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 200);
+          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 800);
           affected_rows INTEGER := 0;
         BEGIN
           CREATE TEMP TABLE _img_state_backup ON COMMIT DROP AS
           SELECT item_code, BOOL_OR(has_image IS TRUE) AS has_image
           FROM top_promotions_cache
-          WHERE window_hours = v_window_hours
           GROUP BY item_code;
 
           DELETE FROM top_promotions_cache WHERE window_hours = v_window_hours;
@@ -856,7 +855,7 @@ def update_schema():
           limited_store_promos AS (
             SELECT *
             FROM ranked_store_items
-            WHERE store_rank <= 600
+            WHERE store_rank <= 2000
           ),
           scored_raw AS (
             SELECT
@@ -913,10 +912,12 @@ def update_schema():
             FROM limited_store_promos lsp
             JOIN product_prices pp ON pp.product_id = lsp.product_id AND pp.store_id = lsp.store_db_id
             JOIN products p ON p.id = lsp.product_id
+            LEFT JOIN _img_state_backup img ON img.item_code = p.item_code::TEXT
             WHERE pp.price IS NOT NULL
               AND pp.price > 0
               AND lsp.promo_price < pp.price
               AND lsp.promo_price >= (pp.price * 0.10)
+              AND COALESCE(img.has_image, TRUE) IS TRUE
               AND p.item_code IS NOT NULL
               AND p.item_code ~ '^[0-9]{8,14}$'
               AND COALESCE(BTRIM(p.item_name), '') <> ''
@@ -1065,7 +1066,7 @@ def update_schema():
               d.promotion_end_date,
               d.updated_at
             FROM store_bucketed d
-            WHERE d.bucket_rank <= 50
+            WHERE d.bucket_rank <= 120
           )
           INSERT INTO top_promotions_cache (
             window_hours,

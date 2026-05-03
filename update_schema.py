@@ -242,6 +242,11 @@ def update_schema():
           ADD COLUMN IF NOT EXISTS unit_of_measure VARCHAR,
           ADD COLUMN IF NOT EXISTS unit_qty VARCHAR,
           ADD COLUMN IF NOT EXISTS b_is_weighted BOOLEAN DEFAULT false,
+          ADD COLUMN IF NOT EXISTS promotion_id VARCHAR,
+          ADD COLUMN IF NOT EXISTS promotion_description TEXT,
+          ADD COLUMN IF NOT EXISTS promo_kind VARCHAR DEFAULT 'regular',
+          ADD COLUMN IF NOT EXISTS promo_label VARCHAR DEFAULT 'מבצע',
+          ADD COLUMN IF NOT EXISTS is_conditional_promo BOOLEAN DEFAULT false,
           ADD COLUMN IF NOT EXISTS has_image BOOLEAN DEFAULT NULL;
         """)
 
@@ -714,10 +719,20 @@ def update_schema():
         )
         RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
         DECLARE
-          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 1);
+          v_window_hours INT := CASE
+            WHEN p_window_hours IS NULL THEN 24
+            WHEN p_window_hours <= 0 THEN 0
+            ELSE p_window_hours
+          END;
           v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 200);
           affected_rows INTEGER := 0;
         BEGIN
+          CREATE TEMP TABLE _img_state_backup ON COMMIT DROP AS
+          SELECT item_code, BOOL_OR(has_image IS TRUE) AS has_image
+          FROM top_promotions_cache
+          WHERE window_hours = v_window_hours
+          GROUP BY item_code;
+
           DELETE FROM top_promotions_cache WHERE window_hours = v_window_hours;
 
           WITH scoped_store_promos AS (
@@ -729,15 +744,92 @@ def update_schema():
               s.store_id::TEXT AS store_id,
               s.store_name::TEXT AS store_name,
               psi.product_id,
+              psi.promotion_id,
               psi.promo_price,
               psi.promotion_end_date,
               psi.updated_at,
+              pr.promotion_description,
+              pr.club_id,
+              pr.min_qty,
+              pr.discounted_price,
+              pr.discounted_price_per_mida,
+              pr.additional_restrictions,
+              pr.remarks,
+              CASE
+                WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
+                THEN 'coupon'
+                WHEN (
+                  CASE
+                    WHEN COALESCE(pr.min_qty, '') ~ '^\s*[0-9]+(\.[0-9]+)?\s*$' THEN pr.min_qty::NUMERIC
+                    ELSE 1::NUMERIC
+                  END
+                ) > 1
+                  OR COALESCE(pr.additional_restrictions, '') ILIKE '%additionalistotal'': ''1''%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%מתנה%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%ומעלה%'
+                THEN 'conditional'
+                WHEN COALESCE(BTRIM(pr.club_id), '') <> ''
+                  AND COALESCE(BTRIM(pr.club_id), '') NOT IN ('0', '0.0', '0 - כלל הלקוחות')
+                  AND COALESCE(pr.club_id, '') NOT ILIKE '%כלל הלקוחות%'
+                THEN 'club'
+                ELSE 'regular'
+              END AS promo_kind,
+              CASE
+                WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
+                  OR (
+                    COALESCE(BTRIM(pr.club_id), '') <> ''
+                    AND COALESCE(BTRIM(pr.club_id), '') NOT IN ('0', '0.0', '0 - כלל הלקוחות')
+                    AND COALESCE(pr.club_id, '') NOT ILIKE '%כלל הלקוחות%'
+                  )
+                THEN TRUE
+                ELSE FALSE
+              END AS is_conditional_promo,
+              CASE
+                WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
+                THEN 'קופון'
+                WHEN (
+                  CASE
+                    WHEN COALESCE(pr.min_qty, '') ~ '^\s*[0-9]+(\.[0-9]+)?\s*$' THEN pr.min_qty::NUMERIC
+                    ELSE 1::NUMERIC
+                  END
+                ) > 1
+                  OR COALESCE(pr.additional_restrictions, '') ILIKE '%additionalistotal'': ''1''%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%מתנה%'
+                  OR COALESCE(pr.promotion_description, '') ILIKE '%ומעלה%'
+                THEN 'מותנה'
+                WHEN COALESCE(BTRIM(pr.club_id), '') <> ''
+                  AND COALESCE(BTRIM(pr.club_id), '') NOT IN ('0', '0.0', '0 - כלל הלקוחות')
+                  AND COALESCE(pr.club_id, '') NOT ILIKE '%כלל הלקוחות%'
+                THEN 'מועדון'
+                ELSE 'מבצע'
+              END AS promo_label,
               ROW_NUMBER() OVER (
-                PARTITION BY s.id
-                ORDER BY psi.updated_at DESC NULLS LAST, psi.promo_price ASC NULLS LAST, psi.product_id ASC
-              ) AS store_rank
+                PARTITION BY s.id, psi.product_id
+                ORDER BY
+                  CASE
+                    WHEN (
+                      COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
+                      OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
+                      OR (
+                        COALESCE(BTRIM(pr.club_id), '') <> ''
+                        AND COALESCE(BTRIM(pr.club_id), '') NOT IN ('0', '0.0', '0 - כלל הלקוחות')
+                        AND COALESCE(pr.club_id, '') NOT ILIKE '%כלל הלקוחות%'
+                      )
+                    ) THEN 1
+                    ELSE 0
+                  END ASC,
+                  psi.promo_price ASC NULLS LAST,
+                  psi.updated_at DESC NULLS LAST,
+                  psi.product_id ASC
+              ) AS item_promo_rank
             FROM promotion_store_items psi
             JOIN stores s ON s.id = psi.store_id
+            LEFT JOIN promotions pr
+              ON pr.chain_id = psi.chain_id
+             AND pr.promotion_id = psi.promotion_id
             WHERE COALESCE(s.city, '') <> ''
               AND psi.promo_price IS NOT NULL
               AND psi.promo_price > 0
@@ -747,10 +839,24 @@ def update_schema():
                 OR psi.updated_at >= NOW() - make_interval(hours => v_window_hours)
               )
           ),
-          limited_store_promos AS (
+          best_store_items AS (
             SELECT *
             FROM scoped_store_promos
-            WHERE store_rank <= 250
+            WHERE item_promo_rank = 1
+          ),
+          ranked_store_items AS (
+            SELECT
+              bsi.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY bsi.store_db_id
+                ORDER BY bsi.promo_price ASC NULLS LAST, bsi.updated_at DESC NULLS LAST, bsi.product_id ASC
+              ) AS store_rank
+            FROM best_store_items bsi
+          ),
+          limited_store_promos AS (
+            SELECT *
+            FROM ranked_store_items
+            WHERE store_rank <= 600
           ),
           scored_raw AS (
             SELECT
@@ -762,6 +868,11 @@ def update_schema():
               p.item_code::TEXT AS item_code,
               p.item_name::TEXT AS item_name,
               p.manufacturer_name::TEXT AS manufacturer_name,
+              lsp.promotion_id,
+              lsp.promotion_description,
+              lsp.promo_kind,
+              lsp.promo_label,
+              lsp.is_conditional_promo,
               pp.unit_of_measure::TEXT AS unit_of_measure,
               pp.unit_qty::TEXT AS unit_qty,
               COALESCE(pp.b_is_weighted, FALSE) AS b_is_weighted,
@@ -776,16 +887,27 @@ def update_schema():
                 )
                 ELSE 0::NUMERIC
               END AS discount_percent,
-              ROUND(
-                (
-                  CASE
-                    WHEN pp.price > 0 THEN (GREATEST(pp.price - LEAST(pp.price, lsp.promo_price), 0) / pp.price) * 100.0
-                    ELSE 0
-                  END
-                ) * 0.40
-                + (LEAST(GREATEST(pp.price - LEAST(pp.price, lsp.promo_price), 0), 80) * 0.60),
-                2
-              ) AS smart_score,
+               ROUND(
+                 (
+                   CASE
+                     WHEN pp.price > 0 THEN (GREATEST(pp.price - LEAST(pp.price, lsp.promo_price), 0) / pp.price) * 100.0
+                     ELSE 0
+                   END
+                 ) * 0.40
+                 + (LEAST(GREATEST(pp.price - LEAST(pp.price, lsp.promo_price), 0), 80) * 0.60)
+                 - (
+                   CASE
+                     WHEN LOWER(COALESCE(lsp.chain_name, '')) = 'be'
+                       OR COALESCE(lsp.chain_name, '') ILIKE '%יוחננוף%'
+                       OR COALESCE(lsp.chain_name, '') ILIKE '%יוחנננוף%'
+                       OR COALESCE(lsp.chain_name, '') = 'שופרסל שלי'
+                       OR COALESCE(lsp.chain_name, '') = 'שופרסל דיל'
+                     THEN 1000
+                     ELSE 0
+                   END
+                 ),
+                 2
+               ) AS smart_score,
               lsp.promotion_end_date,
               lsp.updated_at
             FROM limited_store_promos lsp
@@ -794,18 +916,32 @@ def update_schema():
             WHERE pp.price IS NOT NULL
               AND pp.price > 0
               AND lsp.promo_price < pp.price
-              AND lsp.promo_price >= (pp.price * 0.05)
+              AND lsp.promo_price >= (pp.price * 0.10)
               AND p.item_code IS NOT NULL
               AND p.item_code ~ '^[0-9]{8,14}$'
               AND COALESCE(BTRIM(p.item_name), '') <> ''
               AND p.item_name NOT ILIKE '%משלוח%'
+              AND p.item_name NOT ILIKE '%גולד לייב%'
+              AND p.item_name NOT ILIKE '%גלנפידיך%'
+              AND p.item_name NOT ILIKE '%בלאק לייב%'
+              AND p.item_name NOT ILIKE '%טקילה%'
+              AND p.item_name NOT ILIKE '%בלו לייבל%'
+              AND p.item_name NOT ILIKE '%בקרדי%'
+              AND p.item_name NOT ILIKE '%מאסק בלאק%'
+              AND p.item_name NOT ILIKE '%glenfiddich%'
+              AND p.item_name NOT ILIKE '%bacardi%'
+              AND p.item_name NOT ILIKE '%black label%'
+              AND p.item_name NOT ILIKE '%blue label%'
+              AND p.item_name NOT ILIKE '%gold label%'
+              AND p.item_name NOT ILIKE '%tequila%'
+              AND p.item_name NOT ILIKE '%musk black%'
           ),
           deduped AS (
             SELECT
               sr.*,
               ROW_NUMBER() OVER (
                 PARTITION BY sr.city, sr.chain_id, sr.store_id, sr.item_code
-                ORDER BY sr.promo_price ASC NULLS LAST, sr.updated_at DESC NULLS LAST
+                ORDER BY sr.is_conditional_promo ASC, sr.promo_price ASC NULLS LAST, sr.updated_at DESC NULLS LAST
               ) AS dedupe_rank
             FROM scored_raw sr
           ),
@@ -824,6 +960,11 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.promotion_id,
+              d.promotion_description,
+              d.promo_kind,
+              d.promo_label,
+              d.is_conditional_promo,
               d.unit_of_measure,
               d.unit_qty,
               d.b_is_weighted,
@@ -853,6 +994,11 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.promotion_id,
+              d.promotion_description,
+              d.promo_kind,
+              d.promo_label,
+              d.is_conditional_promo,
               d.unit_of_measure,
               d.unit_qty,
               d.b_is_weighted,
@@ -864,6 +1010,26 @@ def update_schema():
               d.smart_score,
               d.promotion_end_date,
               d.updated_at
+            FROM deduped d
+            WHERE d.dedupe_rank = 1
+          ),
+          store_bucketed AS (
+            SELECT
+              d.*,
+              CASE
+                WHEN COALESCE(d.promo_kind, 'regular') IN ('coupon', 'club', 'card', 'insurance')
+                THEN 'coupon_like'
+                ELSE 'standard'
+              END AS store_bucket,
+              ROW_NUMBER() OVER (
+                PARTITION BY d.city, d.chain_id, d.store_id,
+                  CASE
+                    WHEN COALESCE(d.promo_kind, 'regular') IN ('coupon', 'club', 'card', 'insurance')
+                    THEN 'coupon_like'
+                    ELSE 'standard'
+                  END
+                ORDER BY d.smart_score DESC NULLS LAST, d.discount_percent DESC NULLS LAST, d.discount_amount DESC NULLS LAST, d.updated_at DESC NULLS LAST, d.item_code ASC
+              ) AS bucket_rank
             FROM deduped d
             WHERE d.dedupe_rank = 1
           ),
@@ -882,6 +1048,11 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.promotion_id,
+              d.promotion_description,
+              d.promo_kind,
+              d.promo_label,
+              d.is_conditional_promo,
               d.unit_of_measure,
               d.unit_qty,
               d.b_is_weighted,
@@ -893,8 +1064,8 @@ def update_schema():
               d.smart_score,
               d.promotion_end_date,
               d.updated_at
-            FROM deduped d
-            WHERE d.dedupe_rank = 1
+            FROM store_bucketed d
+            WHERE d.bucket_rank <= 50
           )
           INSERT INTO top_promotions_cache (
             window_hours,
@@ -908,6 +1079,11 @@ def update_schema():
             item_code,
             item_name,
             manufacturer_name,
+            promotion_id,
+            promotion_description,
+            promo_kind,
+            promo_label,
+            is_conditional_promo,
             unit_of_measure,
             unit_qty,
             b_is_weighted,
@@ -933,6 +1109,11 @@ def update_schema():
             q.item_code,
             q.item_name,
             q.manufacturer_name,
+            q.promotion_id,
+            q.promotion_description,
+            q.promo_kind,
+            q.promo_label,
+            q.is_conditional_promo,
             q.unit_of_measure,
             q.unit_qty,
             q.b_is_weighted,
@@ -954,6 +1135,19 @@ def update_schema():
           ) q;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;
+
+          UPDATE top_promotions_cache tpc
+          SET has_image = b.has_image
+          FROM _img_state_backup b
+          WHERE tpc.window_hours = v_window_hours
+            AND tpc.item_code = b.item_code
+            AND b.has_image IS NOT NULL;
+
+          UPDATE top_promotions_cache
+          SET has_image = FALSE
+          WHERE window_hours = v_window_hours
+            AND has_image IS NULL;
+
           RETURN affected_rows;
         END;
         $$;
@@ -998,7 +1192,11 @@ def update_schema():
           v_scope TEXT;
           v_chain_id TEXT := COALESCE(p_chain_id, '');
           v_store_id TEXT := COALESCE(p_store_id, '');
-          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 1);
+          v_window_hours INT := CASE
+            WHEN p_window_hours IS NULL THEN 24
+            WHEN p_window_hours <= 0 THEN 0
+            ELSE p_window_hours
+          END;
           v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 50);
           v_offset INT := GREATEST(COALESCE(p_offset, 0), 0);
         BEGIN

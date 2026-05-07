@@ -216,6 +216,101 @@ def get_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+# ── Promo classification (mirrors /promotions filtering) ─────────────────────
+
+def _normalize_text(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _parse_maybe_number(value: str | None) -> float | None:
+    normalized = _normalize_text(value).replace(",", ".")
+    if not normalized:
+        return None
+    try:
+        return float(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_truthy(value: str | None) -> bool:
+    normalized = _normalize_text(value)
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+
+    numeric = _parse_maybe_number(value)
+    return numeric is not None and numeric > 0
+
+
+def _has_any(text: str, needles: list[str]) -> bool:
+    return any(needle in text for needle in needles)
+
+
+def _has_english_word(text: str, word: str) -> bool:
+    return re.search(rf"(^|[^a-z]){re.escape(word)}([^a-z]|$)", text, re.IGNORECASE) is not None
+
+
+def _has_club_id(club_id_raw: str | None) -> bool:
+    normalized = _normalize_text(club_id_raw)
+    if not normalized:
+        return False
+    if normalized in {"0", "0.0", "0.00", "0.000", "no_body", "none", "null", "nan"}:
+        return False
+
+    numeric = _parse_maybe_number(club_id_raw)
+    if numeric is not None:
+        return numeric > 0
+
+    return True
+
+
+def _is_coupon_flagged(additional_is_coupon: str | None, additional_restrictions: str | None) -> bool:
+    coupon_numeric = _parse_maybe_number(additional_is_coupon)
+    if coupon_numeric is not None:
+        return coupon_numeric > 0
+    if _looks_truthy(additional_is_coupon):
+        return True
+
+    restrictions = _normalize_text(additional_restrictions)
+    if not restrictions:
+        return False
+
+    return (
+        re.search(r"additionaliscoupon[^a-z0-9]*['\"]?1(?:\.0+)?\b", restrictions) is not None
+        or re.search(r"additional[_\s-]*is[_\s-]*coupon[^a-z0-9]*['\"]?1(?:\.0+)?\b", restrictions) is not None
+    )
+
+
+def should_hide_promo_when_conditional_filter_off(
+    promotion_description: str | None,
+    additional_is_coupon: str | None,
+    additional_restrictions: str | None,
+    club_id: str | None,
+) -> bool:
+    description = _normalize_text(promotion_description)
+    restrictions = _normalize_text(additional_restrictions)
+    combined = f"{description} {restrictions}".strip()
+
+    is_insurance = _has_any(combined, ["ביטוח"]) or _has_english_word(combined, "insurance")
+    is_card = (
+        _has_any(combined, ["אשראי", "כרטיס", "ויזה", "מאסטר", "אמקס"])
+        or _has_english_word(combined, "visa")
+        or _has_english_word(combined, "mastercard")
+        or _has_english_word(combined, "card")
+    )
+    is_coupon = (
+        _is_coupon_flagged(additional_is_coupon, additional_restrictions)
+        or _has_any(combined, ["קופון"])
+        or _has_english_word(combined, "coupon")
+    )
+    is_club = (
+        _has_club_id(club_id)
+        or _has_any(combined, ["מועדון", "חברי מועדון", "לקוחות מועדון"])
+        or _has_english_word(combined, "club")
+    )
+
+    return is_coupon or is_club or is_card or is_insurance
+
+
 # ── Cloudinary URL ────────────────────────────────────────────────────────────
 
 def cloudinary_url(item_code: str) -> str:
@@ -589,7 +684,10 @@ def main():
                     pp.price            AS store_base_price,
                     psi.promo_price,
                     pr.promotion_end_date AS promo_end,
-                    pr.promotion_description
+                    pr.promotion_description,
+                    pr.additional_is_coupon,
+                    pr.additional_restrictions,
+                    pr.club_id
                 FROM promotion_store_items psi
                 JOIN products p      ON p.id = psi.product_id
                 JOIN stores s        ON s.id = psi.store_id
@@ -621,6 +719,14 @@ def main():
         from collections import defaultdict
         deals_map: dict[tuple, list[dict]] = defaultdict(list)
         for row in store_rows:
+            if should_hide_promo_when_conditional_filter_off(
+                row.get("promotion_description"),
+                row.get("additional_is_coupon"),
+                row.get("additional_restrictions"),
+                row.get("club_id"),
+            ):
+                continue
+
             deals_map[(row["item_code"], row["city"])].append({
                 "chain_id":        row["chain_id"],
                 "chain_name":      row["chain_name"],

@@ -18,11 +18,15 @@ Logic:
 import os
 import re
 import sys
+import hmac
+import base64
+import hashlib
 import logging
 import requests
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 logging.basicConfig(
@@ -35,7 +39,11 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRESQL_URL"
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 RESEND_FROM = os.environ.get("RESEND_FROM_EMAIL", "Agali Alerts <alerts@agali.live>")
 SITE_URL = os.environ.get("SITE_URL", "https://agali.live")
-CLOUDINARY_CLOUD = "dprve5nst"
+VERIFY_TLS = os.environ.get("SKIP_TLS_VERIFY", "").lower() != "true"
+IMGPROXY_BASE_URL = (os.environ.get("IMGPROXY_BASE_URL") or "https://img.agali.live").rstrip("/")
+DO_SPACES_BUCKET = os.environ.get("DO_SPACES_BUCKET")
+IMGPROXY_KEY_HEX = os.environ.get("IMGPROXY_KEY")
+IMGPROXY_SALT_HEX = os.environ.get("IMGPROXY_SALT")
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -311,13 +319,38 @@ def should_hide_promo_when_conditional_filter_off(
     return is_coupon or is_club or is_card or is_insurance
 
 
-# ── Cloudinary URL ────────────────────────────────────────────────────────────
+# ── Product image URL (local signed imgproxy URL) ────────────────────────────
 
-def cloudinary_url(item_code: str) -> str:
-    return (
-        f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}"
-        f"/image/upload/f_auto,q_auto,w_200/products/{item_code}.jpg"
-    )
+_PRODUCT_IMAGE_URL_CACHE: dict[str, str | None] = {}
+
+
+def product_image_url(item_code: str) -> str | None:
+    normalized = str(item_code or "").strip()
+    if not normalized:
+        return None
+
+    cached = _PRODUCT_IMAGE_URL_CACHE.get(normalized)
+    if cached is not None or normalized in _PRODUCT_IMAGE_URL_CACHE:
+        return cached
+
+    try:
+        if not DO_SPACES_BUCKET or not IMGPROXY_KEY_HEX or not IMGPROXY_SALT_HEX:
+            raise ValueError("missing IMGPROXY_KEY, IMGPROXY_SALT, or DO_SPACES_BUCKET")
+
+        key = bytes.fromhex(IMGPROXY_KEY_HEX)
+        salt = bytes.fromhex(IMGPROXY_SALT_HEX)
+        object_path = f"products/{quote(normalized, safe='')}.jpg"
+        transformation_path = f"/rs:fill:320:320/plain/s3://{DO_SPACES_BUCKET}/{object_path}@webp"
+        digest = hmac.new(key, salt + transformation_path.encode("utf-8"), hashlib.sha256).digest()
+        signature = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        image_url = f"{IMGPROXY_BASE_URL}/{signature}{transformation_path}"
+        _PRODUCT_IMAGE_URL_CACHE[normalized] = image_url
+        return image_url
+    except Exception as error:
+        log.warning("Product image signing failed for %s: %s", normalized, error)
+
+    _PRODUCT_IMAGE_URL_CACHE[normalized] = None
+    return None
 
 
 # ── HTML email builder ────────────────────────────────────────────────────────
@@ -336,7 +369,7 @@ def build_html_email(user_name: str, lang: str, products: list[dict]) -> str:
     product_cards = ""
     for p in products:
         product_url = f"{SITE_URL}/product/{p['item_code']}"
-        img_url = cloudinary_url(p["item_code"])
+        img_url = product_image_url(p["item_code"])
 
         # ── Group stores by chain — keep best (lowest) promo per chain ──────
         from collections import defaultdict as _dd
@@ -438,7 +471,7 @@ def build_html_email(user_name: str, lang: str, products: list[dict]) -> str:
               <tr>
                 <td style="padding:0;width:80px;vertical-align:top;">
                   <a href="{product_url}" style="display:block;text-decoration:none;">
-                    <img src="{img_url}" width="80" height="80" alt="{_esc(p['item_name'])}"
+                    <img src="{img_url or ''}" width="80" height="80" alt="{_esc(p['item_name'])}"
                       style="display:block;width:80px;height:80px;object-fit:contain;background:#1a1a4a;"
                       onerror="this.style.display='none'" />
                   </a>

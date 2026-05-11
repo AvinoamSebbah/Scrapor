@@ -25,9 +25,10 @@ python refresh_top_promos.py --window-hours 168 --top-n 200 --skip-audit
 
 1. SQL génère `top_n × CANDIDATE_FACTOR` (= 800) candidats
 2. Appels batch à `/api/products/images/batch` (50 items/lot) → le backend vérifie dans cet ordre :
-   - Cloudinary (cache existant → gratuit)
-   - Pricez → si trouvé, upload dans Cloudinary
-   - OpenFoodFacts → si trouvé, upload dans Cloudinary
+   - DigitalOcean Spaces (cache existant)
+   - Pricez via le bridge Cloudinary
+   - upload de l'image bridgée vers DigitalOcean Spaces
+   - si Pricez/bridge échoue, le produit est considéré sans image
 3. `has_image` mis à jour dans la DB
 4. **Lignes sans image supprimées**
 5. Re-rank des lignes restantes → top 200 avec images

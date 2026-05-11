@@ -6,7 +6,7 @@ Peuple top_promotions_cache via refresh_top_promotions_cache().
 
 Par défaut le script :
   1. Génère CANDIDATE_FACTOR × top_n candidats all-time en SQL
-  2. Vérifie les images via l'API backend (Cloudinary → Pricez → OpenFoodFacts)
+  2. Vérifie les images via l'API backend (Spaces → Pricez via Cloudinary bridge → Spaces)
   3. Supprime les lignes sans image du cache
   4. Re-rank les lignes restantes et recoupe à top_n final
 
@@ -285,7 +285,7 @@ def _check_images(conn, window_hours: int, include_no_image: bool, top_n: int) -
         try:
             resp = session.post(
                 endpoint,
-                json={"barcodes": batch},
+                json={"barcodes": batch, "bypassNegativeCache": True},
                 timeout=IMAGE_REQUEST_TIMEOUT,
                 verify=False,
             )

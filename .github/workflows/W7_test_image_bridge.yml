@@ -1,0 +1,127 @@
+name: "W7 · Test Image Bridge"
+
+on:
+  workflow_dispatch:
+    inputs:
+      barcode:
+        description: "Optional barcode to test. Leave empty to auto-find a missing Spaces image from top_promotions_cache."
+        required: false
+        default: ""
+      max_candidates:
+        description: "Max DB candidates to try when barcode is empty"
+        required: false
+        default: "300"
+
+jobs:
+  test-image-bridge:
+    name: "Pricez → Cloudinary bridge → Spaces"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt requests
+
+      - name: Run bridge test
+        env:
+          DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
+          BACKEND_API_URL: "https://api.agali.live"
+          TEST_BARCODE: ${{ inputs.barcode }}
+          MAX_CANDIDATES: ${{ inputs.max_candidates }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import time
+
+          import psycopg2
+          import requests
+
+          backend = os.environ.get("BACKEND_API_URL", "https://api.agali.live").rstrip("/")
+          endpoint = f"{backend}/api/products/images/batch"
+          barcode = (os.environ.get("TEST_BARCODE") or "").strip()
+          max_candidates = int(os.environ.get("MAX_CANDIDATES") or "300")
+
+          session = requests.Session()
+
+          def batch(code):
+              resp = session.post(
+                  endpoint,
+                  json={"barcodes": [code], "bypassNegativeCache": True},
+                  timeout=90,
+              )
+              resp.raise_for_status()
+              payload = resp.json()
+              return payload.get("images", {}).get(code, {})
+
+          def assert_image_url(url):
+              if not url:
+                  raise AssertionError("No imageUrl returned")
+              resp = session.get(url, timeout=60)
+              resp.raise_for_status()
+              ctype = resp.headers.get("content-type", "")
+              if not ctype.startswith("image/"):
+                  raise AssertionError(f"imageUrl returned non-image content-type: {ctype}")
+              return ctype
+
+          if barcode:
+              candidates = [barcode]
+          else:
+              db_url = os.environ.get("DATABASE_URL")
+              if not db_url:
+                  raise SystemExit("DATABASE_URL/POSTGRESQL_URL secret is required for auto-find mode")
+              conn = psycopg2.connect(db_url, connect_timeout=30)
+              try:
+                  with conn.cursor() as cur:
+                      cur.execute(
+                          """
+                          SELECT DISTINCT item_code
+                          FROM top_promotions_cache
+                          WHERE item_code IS NOT NULL
+                          ORDER BY item_code
+                          LIMIT %s
+                          """,
+                          (max_candidates,),
+                      )
+                      candidates = [str(row[0]).strip() for row in cur.fetchall() if str(row[0]).strip()]
+              finally:
+                  conn.close()
+
+          print(f"Testing {len(candidates)} candidate(s) against {endpoint}")
+          for code in candidates:
+              first = batch(code)
+              source = first.get("source")
+              has_image = bool(first.get("imageUrl"))
+              print(f"{code}: first source={source} has_image={has_image}")
+
+              if source == "spaces":
+                  if barcode:
+                      raise AssertionError(f"{code} is already in Spaces; pick a barcode missing from Spaces to test the bridge")
+                  continue
+
+              if source != "pricez-cloudinary-bridge" or not has_image:
+                  continue
+
+              ctype = assert_image_url(first.get("imageUrl"))
+              time.sleep(2)
+              second = batch(code)
+              second_source = second.get("source")
+              second_has_image = bool(second.get("imageUrl"))
+              print(f"{code}: second source={second_source} has_image={second_has_image} content_type={ctype}")
+
+              if second_source != "spaces" or not second_has_image:
+                  raise AssertionError(f"{code} did not persist to Spaces after bridge")
+
+              print(f"Bridge OK for {code}")
+              sys.exit(0)
+
+          raise SystemExit("No candidate triggered pricez-cloudinary-bridge")
+          PY

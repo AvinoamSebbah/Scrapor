@@ -7,10 +7,6 @@ on:
         description: "Optional barcode to test. Leave empty to auto-find a missing Spaces image from top_promotions_cache."
         required: false
         default: ""
-      pricez_barcode:
-        description: "Known Pricez barcode used for the temporary Cloudinary→Spaces infrastructure test"
-        required: false
-        default: "30149649"
       max_candidates:
         description: "Max DB candidates to try when barcode is empty"
         required: false
@@ -32,109 +28,9 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt requests boto3 cloudinary
+        run: pip install -r requirements.txt requests
 
-      - name: Test direct Cloudinary bridge to temporary Spaces object
-        env:
-          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
-          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
-          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
-          DO_SPACES_ACCESS_KEY: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-          DO_SPACES_SECRET_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
-          DO_SPACES_BUCKET: ${{ secrets.DO_SPACES_BUCKET }}
-          DO_SPACES_REGION: ${{ secrets.DO_SPACES_REGION }}
-          PRICEZ_BARCODE: ${{ inputs.pricez_barcode }}
-        run: |
-          python - <<'PY'
-          import os
-          import sys
-
-          import boto3
-          import cloudinary
-          import cloudinary.uploader
-          import requests
-
-          required = [
-              "CLOUDINARY_CLOUD_NAME",
-              "CLOUDINARY_API_KEY",
-              "CLOUDINARY_API_SECRET",
-              "DO_SPACES_ACCESS_KEY",
-              "DO_SPACES_SECRET_KEY",
-              "DO_SPACES_BUCKET",
-              "DO_SPACES_REGION",
-          ]
-          missing = [name for name in required if not os.environ.get(name)]
-          if missing:
-              raise SystemExit(f"Missing GitHub secrets for bridge infra test: {', '.join(missing)}")
-
-          barcode = (os.environ.get("PRICEZ_BARCODE") or "").strip()
-          if not barcode:
-              raise SystemExit("pricez_barcode input is required")
-
-          run_id = os.environ.get("GITHUB_RUN_ID", "manual")
-          source_url = f"https://m.pricez.co.il/ProductPictures/200x/{barcode}.jpg"
-          public_id = f"github-{run_id}-{barcode}"
-          temp_key = f"bridge-tests/github/{run_id}/{barcode}.jpg"
-
-          cloudinary.config(
-              cloud_name=os.environ["CLOUDINARY_CLOUD_NAME"],
-              api_key=os.environ["CLOUDINARY_API_KEY"],
-              api_secret=os.environ["CLOUDINARY_API_SECRET"],
-              secure=True,
-          )
-
-          s3 = boto3.client(
-              "s3",
-              region_name=os.environ["DO_SPACES_REGION"],
-              endpoint_url=f"https://{os.environ['DO_SPACES_REGION']}.digitaloceanspaces.com",
-              aws_access_key_id=os.environ["DO_SPACES_ACCESS_KEY"],
-              aws_secret_access_key=os.environ["DO_SPACES_SECRET_KEY"],
-          )
-
-          uploaded_public_id = None
-          try:
-              result = cloudinary.uploader.upload(
-                  source_url,
-                  folder="spaces-bridge-tests",
-                  public_id=public_id,
-                  overwrite=True,
-                  invalidate=False,
-                  resource_type="image",
-              )
-              uploaded_public_id = result["public_id"]
-              secure_url = result.get("secure_url")
-              if not secure_url:
-                  raise AssertionError("Cloudinary did not return secure_url")
-
-              image = requests.get(secure_url, timeout=60)
-              image.raise_for_status()
-              content_type = image.headers.get("content-type") or "image/jpeg"
-              if not content_type.startswith("image/"):
-                  raise AssertionError(f"Cloudinary secure_url returned non-image content-type: {content_type}")
-
-              s3.put_object(
-                  Bucket=os.environ["DO_SPACES_BUCKET"],
-                  Key=temp_key,
-                  Body=image.content,
-                  ContentType=content_type,
-                  CacheControl="public, max-age=300",
-                  Metadata={"test": "github-image-bridge"},
-              )
-              s3.head_object(Bucket=os.environ["DO_SPACES_BUCKET"], Key=temp_key)
-              print(f"Direct bridge infra OK: Pricez -> Cloudinary -> Spaces temp_key={temp_key} content_type={content_type}")
-          finally:
-              try:
-                  s3.delete_object(Bucket=os.environ["DO_SPACES_BUCKET"], Key=temp_key)
-              except Exception as exc:
-                  print(f"Warning: could not delete temp Spaces object {temp_key}: {exc}", file=sys.stderr)
-              if uploaded_public_id:
-                  try:
-                      cloudinary.uploader.destroy(uploaded_public_id, resource_type="image")
-                  except Exception as exc:
-                      print(f"Warning: could not delete temp Cloudinary asset {uploaded_public_id}: {exc}", file=sys.stderr)
-          PY
-
-      - name: Run bridge test
+      - name: Run backend bridge test
         env:
           DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
           BACKEND_API_URL: "https://api.agali.live"

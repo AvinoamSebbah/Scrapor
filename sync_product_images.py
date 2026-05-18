@@ -81,7 +81,7 @@ class SyncStats:
     imported_from_openfoodfacts: int = 0
     marked_false: int = 0
     left_unknown: int = 0
-    invalid_barcodes: int = 0
+    openfoodfacts_incompatible_codes: int = 0
     errors: int = 0
 
 
@@ -185,6 +185,7 @@ def _reset_all_to_null(conn, dry_run: bool) -> int:
 def _fetch_products_to_process(
     conn,
     recheck_all: bool,
+    recheck_non_ean_false: bool,
     spaces_checked: bool,
     limit: int | None,
 ) -> list[ProductRow]:
@@ -194,6 +195,10 @@ def _fetch_products_to_process(
         where_sql = "WHERE has_image IS DISTINCT FROM TRUE"
     elif recheck_all:
         where_sql = ""
+    elif recheck_non_ean_false:
+        # Réparation ciblée de l'ancienne règle trop stricte qui écrivait FALSE
+        # sans tenter Pricez sur les codes hors EAN.
+        where_sql = "WHERE has_image IS NULL OR (has_image = FALSE AND item_code !~ '^[0-9]{8,14}$')"
     else:
         where_sql = "WHERE has_image IS NULL"
     limit_sql = "LIMIT %s" if limit is not None else ""
@@ -455,20 +460,9 @@ def _sync_products(
         barcode = product.item_code.strip()
         print(f"[{index}/{len(products)}] {barcode}")
 
-        if not BARCODE_RE.fullmatch(barcode):
-            stats.invalid_barcodes += 1
-            if spaces_checked:
-                pending_false.append(barcode)
-                stats.marked_false += 1
-                print(f"    ❌ {barcode}: has_image=FALSE (barcode invalide)")
-            else:
-                stats.left_unknown += 1
-                print(f"    ?  {barcode}: has_image=NULL (barcode invalide, scan Spaces ignoré)")
-            if len(pending_true) + len(pending_false) >= commit_batch_size:
-                flush()
-            if progress_every > 0 and index % progress_every == 0:
-                _print_progress(index, len(products), stats)
-            continue
+        openfoodfacts_compatible = BARCODE_RE.fullmatch(barcode) is not None
+        if not openfoodfacts_compatible:
+            stats.openfoodfacts_incompatible_codes += 1
 
         explicit_absences = 0
 
@@ -492,32 +486,37 @@ def _sync_products(
             else:
                 explicit_absences += 1
 
-        try:
-            off_source = _openfoodfacts_front_image_url(session, barcode)
-        except OpenFoodFactsRateLimited as exc:
-            # Règle métier voulue pour ce workflow : si Pricez a déjà répondu
-            # explicitement "pas d'image", un 429 OFF ne doit pas empêcher de
-            # conclure FALSE. On le compte donc comme une absence OFF.
-            print(f"    ⚠️  {barcode}: OpenFoodFacts rate-limit — traité comme sans image ({exc})")
+        if not openfoodfacts_compatible:
+            print(f"    ↪️  {barcode}: OpenFoodFacts ignoré (code non-EAN), Pricez a bien été tenté")
             off_source = None
             explicit_absences += 1
-        except TemporaryImageSyncError as exc:
-            print(f"    ⚠️  {barcode}: OpenFoodFacts inconnu — {exc}")
-            off_source = None
-            stats.errors += 1
         else:
-            if off_source:
-                if _try_persist_from_source(session, s3_client, bucket, barcode, "openfoodfacts", off_source):
-                    pending_true.append(barcode)
-                    stats.imported_from_openfoodfacts += 1
-                    print(f"    ✅ {barcode}: importé depuis openfoodfacts → has_image=TRUE")
-                    if len(pending_true) + len(pending_false) >= commit_batch_size:
-                        flush()
-                    if progress_every > 0 and index % progress_every == 0:
-                        _print_progress(index, len(products), stats)
-                    continue
-            else:
+            try:
+                off_source = _openfoodfacts_front_image_url(session, barcode)
+            except OpenFoodFactsRateLimited as exc:
+                # Règle métier voulue pour ce workflow : si Pricez a déjà répondu
+                # explicitement "pas d'image", un 429 OFF ne doit pas empêcher de
+                # conclure FALSE. On le compte donc comme une absence OFF.
+                print(f"    ⚠️  {barcode}: OpenFoodFacts rate-limit — traité comme sans image ({exc})")
+                off_source = None
                 explicit_absences += 1
+            except TemporaryImageSyncError as exc:
+                print(f"    ⚠️  {barcode}: OpenFoodFacts inconnu — {exc}")
+                off_source = None
+                stats.errors += 1
+            else:
+                if off_source:
+                    if _try_persist_from_source(session, s3_client, bucket, barcode, "openfoodfacts", off_source):
+                        pending_true.append(barcode)
+                        stats.imported_from_openfoodfacts += 1
+                        print(f"    ✅ {barcode}: importé depuis openfoodfacts → has_image=TRUE")
+                        if len(pending_true) + len(pending_false) >= commit_batch_size:
+                            flush()
+                        if progress_every > 0 and index % progress_every == 0:
+                            _print_progress(index, len(products), stats)
+                        continue
+                else:
+                    explicit_absences += 1
 
         if spaces_checked and explicit_absences == 2:
             pending_false.append(barcode)
@@ -546,7 +545,7 @@ def _print_summary(stats: SyncStats, dry_run: bool) -> None:
     print(f"  Importés depuis OpenFoodFacts     : {stats.imported_from_openfoodfacts}")
     print(f"  Marqués has_image=FALSE           : {stats.marked_false}")
     print(f"  Restés has_image=NULL             : {stats.left_unknown}")
-    print(f"  Codes non compatibles barcode     : {stats.invalid_barcodes}")
+    print(f"  Codes non compatibles OpenFoodFacts: {stats.openfoodfacts_incompatible_codes}")
     print(f"  Erreurs techniques rencontrées    : {stats.errors}")
 
 
@@ -558,7 +557,7 @@ def _print_progress(index: int, total: int, stats: SyncStats) -> None:
         f"openfoodfacts={stats.imported_from_openfoodfacts} | "
         f"false={stats.marked_false} | "
         f"null={stats.left_unknown} | "
-        f"invalid={stats.invalid_barcodes} | "
+        f"off_incompatible={stats.openfoodfacts_incompatible_codes} | "
         f"errors={stats.errors}"
     )
 
@@ -579,6 +578,11 @@ def main() -> None:
         "--recheck-all",
         action="store_true",
         help="Traiter tous les produits au lieu des seuls produits actuellement à NULL.",
+    )
+    parser.add_argument(
+        "--recheck-non-ean-false",
+        action="store_true",
+        help="Retraiter les FALSE non-EAN hérités de l'ancienne règle qui ne tentait pas Pricez.",
     )
     parser.add_argument("--limit", type=int, default=None, help="Limiter le nombre de produits traités.")
     parser.add_argument("--dry-run", action="store_true", help="Ne pas écrire dans la DB.")
@@ -642,7 +646,13 @@ def main() -> None:
         else:
             print("\n⏭️  Scan Spaces ignoré (--skip-spaces-check).")
 
-        products = _fetch_products_to_process(conn, args.recheck_all, spaces_checked, args.limit)
+        products = _fetch_products_to_process(
+            conn,
+            args.recheck_all,
+            args.recheck_non_ean_false,
+            spaces_checked,
+            args.limit,
+        )
         _banner("Synchronisation distante")
         print(f"  {len(products)} produits à traiter")
         remote_stats = _sync_products(

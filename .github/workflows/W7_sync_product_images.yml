@@ -23,6 +23,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      recheck_non_ean_false:
+        description: "Réparer les FALSE non-EAN issus de l'ancienne règle trop stricte ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       dry_run:
         description: "Dry-run sans écriture DB ?"
         required: false
@@ -95,6 +101,9 @@ jobs:
           fi
           if [ "${{ inputs.recheck_all }}" = "true" ]; then
             ARGS+=(--recheck-all)
+          fi
+          if [ "${{ inputs.recheck_non_ean_false }}" = "true" ]; then
+            ARGS+=(--recheck-non-ean-false)
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS+=(--dry-run)

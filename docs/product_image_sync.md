@@ -39,6 +39,7 @@ Le script ne stocke pas d'URL signée : le chemin durable reste `products/{barco
 | `--reset-all-to-null` | remet toute la colonne `products.has_image` à `NULL` avant le run |
 | `--skip-spaces-check` | saute le scan initial de Spaces ; les produits non prouvés restent `NULL`, jamais `FALSE` |
 | `--recheck-all` | retraite tous les produits, pas seulement ceux actuellement à `NULL` |
+| `--recheck-non-ean-false` | répare les anciens `FALSE` non-EAN écrits avant que Pricez soit tenté pour eux |
 | `--limit N` | limite le nombre de produits traités |
 | `--dry-run` | exécute le flux sans écrire dans la DB |
 | `--preflight-only` | teste uniquement le bridge et l'upload Space, puis s'arrête |
@@ -102,9 +103,16 @@ Le script écrit maintenant explicitement :
 - `✅ ... importé depuis openfoodfacts → has_image=TRUE`
 - `❌ ... has_image=FALSE (...)`
 - `? ... has_image=NULL (...)`
+- `↪️ ... OpenFoodFacts ignoré (code non-EAN), Pricez a bien été tenté`
 
 Et toutes les `100` lignes par défaut, il affiche un résumé :
 
 ```text
-📊 progression 1000/265979 | pricez=... | openfoodfacts=... | false=... | null=... | invalid=... | errors=...
+📊 progression 1000/265979 | pricez=... | openfoodfacts=... | false=... | null=... | off_incompatible=... | errors=...
 ```
+
+Pricez est tenté pour tous les `item_code` non vides.
+OpenFoodFacts est tenté seulement pour les codes compatibles EAN (`8` à `14` chiffres), car son API est indexée par barcode.
+
+Si un ancien run a déjà écrit des `FALSE` sur des codes non-EAN avant cette correction,
+utiliser `--recheck-non-ean-false` permet de les retraiter sans remettre toute la colonne à `NULL`.

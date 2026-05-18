@@ -50,6 +50,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Open PostgreSQL SSH tunnel
+        uses: ./.github/actions/open-postgres-tunnel
+        with:
+          ssh-host: ${{ secrets.DO_HOST }}
+          ssh-user: ${{ secrets.DO_USERNAME }}
+          ssh-port: ${{ secrets.DO_PORT }}
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
       - name: Optional destructive wipe
         if: ${{ inputs.destructive_wipe == 'YES' || github.event.inputs.destructive_wipe == 'YES' }}
         run: |

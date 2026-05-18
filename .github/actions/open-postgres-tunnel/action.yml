@@ -1,0 +1,55 @@
+name: "Open PostgreSQL SSH tunnel"
+description: "Open a loopback-only SSH tunnel from a GitHub Actions runner to the droplet PostgreSQL port."
+
+inputs:
+  ssh-host:
+    description: "Droplet SSH host"
+    required: true
+  ssh-user:
+    description: "Droplet SSH user"
+    required: true
+  ssh-port:
+    description: "Droplet SSH port"
+    required: true
+  ssh-private-key:
+    description: "Private SSH key used to connect to the droplet"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure SSH key
+      shell: bash
+      env:
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+      run: |
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/do_key
+        chmod 600 ~/.ssh/do_key
+
+    - name: Trust droplet host key
+      shell: bash
+      env:
+        SSH_HOST: ${{ inputs.ssh-host }}
+        SSH_PORT: ${{ inputs.ssh-port }}
+      run: |
+        ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+    - name: Open PostgreSQL tunnel
+      shell: bash
+      env:
+        SSH_HOST: ${{ inputs.ssh-host }}
+        SSH_USER: ${{ inputs.ssh-user }}
+        SSH_PORT: ${{ inputs.ssh-port }}
+      run: |
+        ssh -fN \
+          -i ~/.ssh/do_key \
+          -p "$SSH_PORT" \
+          -o ExitOnForwardFailure=yes \
+          -o ServerAliveInterval=30 \
+          -o ServerAliveCountMax=3 \
+          -L 5432:127.0.0.1:5432 \
+          "$SSH_USER@$SSH_HOST"
+
+        timeout 15 bash -c 'until </dev/tcp/127.0.0.1/5432; do sleep 1; done'

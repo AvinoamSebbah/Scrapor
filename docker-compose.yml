@@ -2,8 +2,7 @@ services:
   mongodb:
     image: mongo:latest
     container_name: raw-data-mongodb
-    ports:
-      - "27017:27017"
+    # Port 27017 intentionally NOT exposed to host — DB is only accessible within Docker network
     volumes:
       - mongo-data:/data/db
     networks:

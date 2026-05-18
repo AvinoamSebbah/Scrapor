@@ -36,7 +36,9 @@ app = FastAPI(
     ],
     default_response_class=ORJSONResponse,
 )
-# app.add_middleware(AuthMiddleware)
+# AuthMiddleware is enabled by default. Set DISABLE_AUTH_MIDDLEWARE=true to disable (dev/test only)
+if os.environ.get("DISABLE_AUTH_MIDDLEWARE", "").lower() != "true":
+    app.add_middleware(AuthMiddleware)
 app.add_middleware(TelemetryMiddleware)
 
 

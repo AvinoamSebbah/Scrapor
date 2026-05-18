@@ -1,5 +1,6 @@
 """Module providing authentication and telemetry middleware for the API."""
 
+import hashlib
 import time
 from datetime import datetime
 
@@ -54,9 +55,10 @@ class TelemetryMiddleware(BaseHTTPMiddleware):  # pylint: disable=too-few-public
             "response_size_bytes": len(response_body),
             "client_ip": request.client.host if request.client else None,
             "user_agent": request.headers.get("user-agent"),
-            "authorization_method": str(
-                request.headers.get("Authorization", "").replace("Bearer ", "")
-            ),
+            # Log only a truncated SHA-256 prefix — NEVER log full tokens
+            "authorization_method": hashlib.sha256(
+                request.headers.get("Authorization", "").encode()
+            ).hexdigest()[:12] if request.headers.get("Authorization") else None,
         }
 
         # Send data to Supabase

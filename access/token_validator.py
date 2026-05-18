@@ -39,7 +39,7 @@ class TokenValidator:  # pylint: disable=too-few-public-methods
                 "validate_token", {"input_token": token}
             ).execute()
 
-            print(result)
+            Logger.debug(f"Token validation result: {result}")
             if len(result.data) == 0:
                 return False
 

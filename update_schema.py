@@ -41,9 +41,15 @@ def update_schema():
             manufacturer_name VARCHAR,
             manufacture_country VARCHAR,
             manufacturer_item_description VARCHAR,
+            has_image BOOLEAN DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        """)
+
+        cur.execute("""
+        ALTER TABLE products
+          ADD COLUMN IF NOT EXISTS has_image BOOLEAN DEFAULT NULL;
         """)
 
         cur.execute("""

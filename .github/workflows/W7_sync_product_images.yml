@@ -1,0 +1,108 @@
+name: "W7 · Sync Product Images"
+
+# Workflow volontairement manuel uniquement.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_all_to_null:
+        description: "Remettre toute la colonne products.has_image à NULL avant le run ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      check_spaces_first:
+        description: "Scanner DigitalOcean Spaces avant les sources distantes ?"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      recheck_all:
+        description: "Retraiter tous les produits, pas seulement ceux à NULL ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      dry_run:
+        description: "Dry-run sans écriture DB ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      preflight_only:
+        description: "Tester uniquement le bridge + upload Space, sans toucher la DB ?"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      limit:
+        description: "Nombre max de produits à traiter (vide = illimité)"
+        required: false
+        default: ""
+
+concurrency:
+  group: sync-product-images
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: "Sync products.has_image"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Open PostgreSQL SSH tunnel
+        uses: ./.github/actions/open-postgres-tunnel
+        with:
+          ssh-host: ${{ secrets.DO_HOST }}
+          ssh-user: ${{ secrets.DO_USERNAME }}
+          ssh-port: ${{ secrets.DO_PORT }}
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: Sync product images
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          DO_SPACES_ACCESS_KEY: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          DO_SPACES_SECRET_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+          DO_SPACES_BUCKET: ${{ secrets.DO_SPACES_BUCKET }}
+          DO_SPACES_REGION: ${{ secrets.DO_SPACES_REGION }}
+          OPENFOODFACTS_USER_AGENT: "Agali-image-sync/1.0 (https://agali.live)"
+        shell: bash
+        run: |
+          ARGS=()
+          if [ "${{ inputs.reset_all_to_null }}" = "true" ]; then
+            ARGS+=(--reset-all-to-null)
+          fi
+          if [ "${{ inputs.check_spaces_first }}" = "false" ]; then
+            ARGS+=(--skip-spaces-check)
+          fi
+          if [ "${{ inputs.recheck_all }}" = "true" ]; then
+            ARGS+=(--recheck-all)
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          if [ "${{ inputs.preflight_only }}" = "true" ]; then
+            ARGS+=(--preflight-only)
+          fi
+          if [ -n "${{ inputs.limit }}" ]; then
+            ARGS+=(--limit "${{ inputs.limit }}")
+          fi
+          python sync_product_images.py "${ARGS[@]}"

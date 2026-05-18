@@ -42,6 +42,7 @@ Le script ne stocke pas d'URL signée : le chemin durable reste `products/{barco
 | `--limit N` | limite le nombre de produits traités |
 | `--dry-run` | exécute le flux sans écrire dans la DB |
 | `--preflight-only` | teste uniquement le bridge et l'upload Space, puis s'arrête |
+| `--progress-every N` | affiche un résumé compact toutes les `N` lignes (défaut : `100`) |
 
 ## Variables requises
 
@@ -88,6 +89,22 @@ Le script écrit `FALSE` seulement si :
 
 1. le scan Spaces a été réellement exécuté,
 2. Pricez a explicitement répondu qu'il n'y avait pas d'image,
-3. OpenFoodFacts n'a fourni aucune image sélectionnée.
+3. OpenFoodFacts n'a fourni aucune image sélectionnée **ou** a répondu `429`.
 
-Si le bridge, l'API, le réseau ou l'upload Space échoue, le produit reste `NULL`.
+Si Pricez échoue techniquement, le produit reste `NULL`.
+Les autres erreurs OpenFoodFacts, ainsi que les erreurs de bridge/réseau/upload, gardent aussi le produit à `NULL`.
+
+## Logs utiles pendant un run
+
+Le script écrit maintenant explicitement :
+
+- `✅ ... importé depuis pricez → has_image=TRUE`
+- `✅ ... importé depuis openfoodfacts → has_image=TRUE`
+- `❌ ... has_image=FALSE (...)`
+- `? ... has_image=NULL (...)`
+
+Et toutes les `100` lignes par défaut, il affiche un résumé :
+
+```text
+📊 progression 1000/265979 | pricez=... | openfoodfacts=... | false=... | null=... | invalid=... | errors=...
+```

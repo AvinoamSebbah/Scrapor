@@ -56,10 +56,15 @@ OPENFOODFACTS_PREFLIGHT_BARCODE = "3017620422003"
 DEFAULT_BATCH_SIZE = 250
 DEFAULT_REQUEST_TIMEOUT = 20
 DEFAULT_USER_AGENT = "Agali-image-sync/1.0 (https://agali.live)"
+DEFAULT_PROGRESS_EVERY = 100
 
 
 class TemporaryImageSyncError(RuntimeError):
     """Erreur technique : on doit garder has_image=NULL, pas FALSE."""
+
+
+class OpenFoodFactsRateLimited(RuntimeError):
+    """OFF a rate-limit ce lookup ; pour ce workflow on le traite comme sans image."""
 
 
 @dataclass
@@ -292,6 +297,8 @@ def _openfoodfacts_front_image_url(session: requests.Session, barcode: str) -> s
 
     if response.status_code == 404:
         return None
+    if response.status_code == 429:
+        raise OpenFoodFactsRateLimited("OpenFoodFacts unexpected status 429")
     if response.status_code != 200:
         raise TemporaryImageSyncError(f"OpenFoodFacts unexpected status {response.status_code}")
 
@@ -429,6 +436,7 @@ def _sync_products(
     spaces_checked: bool,
     dry_run: bool,
     commit_batch_size: int,
+    progress_every: int,
 ) -> SyncStats:
     stats = SyncStats(total_candidates=len(products))
     pending_true: list[str] = []
@@ -452,10 +460,14 @@ def _sync_products(
             if spaces_checked:
                 pending_false.append(barcode)
                 stats.marked_false += 1
+                print(f"    ❌ {barcode}: has_image=FALSE (barcode invalide)")
             else:
                 stats.left_unknown += 1
+                print(f"    ?  {barcode}: has_image=NULL (barcode invalide, scan Spaces ignoré)")
             if len(pending_true) + len(pending_false) >= commit_batch_size:
                 flush()
+            if progress_every > 0 and index % progress_every == 0:
+                _print_progress(index, len(products), stats)
             continue
 
         explicit_absences = 0
@@ -471,14 +483,24 @@ def _sync_products(
                 if _try_persist_from_source(session, s3_client, bucket, barcode, "pricez", pricez_source):
                     pending_true.append(barcode)
                     stats.imported_from_pricez += 1
+                    print(f"    ✅ {barcode}: importé depuis pricez → has_image=TRUE")
                     if len(pending_true) + len(pending_false) >= commit_batch_size:
                         flush()
+                    if progress_every > 0 and index % progress_every == 0:
+                        _print_progress(index, len(products), stats)
                     continue
             else:
                 explicit_absences += 1
 
         try:
             off_source = _openfoodfacts_front_image_url(session, barcode)
+        except OpenFoodFactsRateLimited as exc:
+            # Règle métier voulue pour ce workflow : si Pricez a déjà répondu
+            # explicitement "pas d'image", un 429 OFF ne doit pas empêcher de
+            # conclure FALSE. On le compte donc comme une absence OFF.
+            print(f"    ⚠️  {barcode}: OpenFoodFacts rate-limit — traité comme sans image ({exc})")
+            off_source = None
+            explicit_absences += 1
         except TemporaryImageSyncError as exc:
             print(f"    ⚠️  {barcode}: OpenFoodFacts inconnu — {exc}")
             off_source = None
@@ -488,8 +510,11 @@ def _sync_products(
                 if _try_persist_from_source(session, s3_client, bucket, barcode, "openfoodfacts", off_source):
                     pending_true.append(barcode)
                     stats.imported_from_openfoodfacts += 1
+                    print(f"    ✅ {barcode}: importé depuis openfoodfacts → has_image=TRUE")
                     if len(pending_true) + len(pending_false) >= commit_batch_size:
                         flush()
+                    if progress_every > 0 and index % progress_every == 0:
+                        _print_progress(index, len(products), stats)
                     continue
             else:
                 explicit_absences += 1
@@ -497,11 +522,15 @@ def _sync_products(
         if spaces_checked and explicit_absences == 2:
             pending_false.append(barcode)
             stats.marked_false += 1
+            print(f"    ❌ {barcode}: has_image=FALSE (absent de Pricez et OpenFoodFacts)")
         else:
             stats.left_unknown += 1
+            print(f"    ?  {barcode}: has_image=NULL (état encore inconnu)")
 
         if len(pending_true) + len(pending_false) >= commit_batch_size:
             flush()
+        if progress_every > 0 and index % progress_every == 0:
+            _print_progress(index, len(products), stats)
 
     flush()
     return stats
@@ -519,6 +548,19 @@ def _print_summary(stats: SyncStats, dry_run: bool) -> None:
     print(f"  Restés has_image=NULL             : {stats.left_unknown}")
     print(f"  Codes non compatibles barcode     : {stats.invalid_barcodes}")
     print(f"  Erreurs techniques rencontrées    : {stats.errors}")
+
+
+def _print_progress(index: int, total: int, stats: SyncStats) -> None:
+    print(
+        "  📊 progression "
+        f"{index}/{total} | "
+        f"pricez={stats.imported_from_pricez} | "
+        f"openfoodfacts={stats.imported_from_openfoodfacts} | "
+        f"false={stats.marked_false} | "
+        f"null={stats.left_unknown} | "
+        f"invalid={stats.invalid_barcodes} | "
+        f"errors={stats.errors}"
+    )
 
 
 def main() -> None:
@@ -555,6 +597,12 @@ def main() -> None:
         type=int,
         default=DEFAULT_BATCH_SIZE,
         help=f"Taille des lots d'UPDATE DB (défaut: {DEFAULT_BATCH_SIZE}).",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=DEFAULT_PROGRESS_EVERY,
+        help=f"Afficher un résumé compact toutes les N lignes (défaut: {DEFAULT_PROGRESS_EVERY}).",
     )
     args = parser.parse_args()
 
@@ -606,6 +654,7 @@ def main() -> None:
             spaces_checked=spaces_checked,
             dry_run=args.dry_run,
             commit_batch_size=max(1, args.commit_batch_size),
+            progress_every=max(0, args.progress_every),
         )
         remote_stats.already_in_spaces = stats.already_in_spaces
         _print_summary(remote_stats, args.dry_run)

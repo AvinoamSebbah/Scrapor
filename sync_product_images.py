@@ -35,7 +35,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import boto3
 import cloudinary
@@ -248,9 +248,10 @@ def _list_space_barcodes(s3_client, bucket: str) -> set[str]:
             key = str(obj.get("Key") or "")
             if not key.startswith(SPACE_PRODUCTS_PREFIX) or not key.endswith(SPACE_IMAGE_SUFFIX):
                 continue
-            barcode = key[len(SPACE_PRODUCTS_PREFIX) : -len(SPACE_IMAGE_SUFFIX)]
-            if BARCODE_RE.fullmatch(barcode):
-                found.add(barcode)
+            item_code = key[len(SPACE_PRODUCTS_PREFIX) : -len(SPACE_IMAGE_SUFFIX)]
+            if not item_code or "/" in item_code:
+                continue
+            found.add(unquote(item_code))
     return found
 
 

@@ -111,7 +111,7 @@ BEGIN
       s.chain_name::varchar,
       s.store_id::varchar,
       s.store_name::varchar,
-      s.city::varchar,
+      COALESCE(NULLIF(s.city, ''), 'Online')::varchar AS city,
       p_time_window::varchar      AS time_window,
 
       -- Type de promo : 'conditional' si coupon / club / carte / assurance
@@ -211,7 +211,11 @@ BEGIN
       AND pr.item_code ~ '^[0-9]{8,14}$'
       AND COALESCE(BTRIM(pr.item_name), '') <> ''
       AND pr.item_name NOT ILIKE '%משלוח%'
-      AND COALESCE(s.city, '') <> ''
+      AND (
+        COALESCE(s.city, '') <> ''
+        OR s.chain_id = '5144744100002'
+        OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+      )
   ),
 
   -- ── 2. Déduplication : un seul enregistrement par (store, type, item_code) ─
@@ -266,9 +270,9 @@ BEGIN
     promo_kind,
     CASE promo_kind
       WHEN 'coupon'    THEN 'קופון'
-      WHEN 'club'      THEN 'הטבת מועדון'
-      WHEN 'card'      THEN 'הטבת אשראי'
-      WHEN 'insurance' THEN 'הטבת ביטוח'
+      WHEN 'club'      THEN 'מועדון'
+      WHEN 'card'      THEN 'אשראי'
+      WHEN 'insurance' THEN 'ביטוח'
       ELSE                  'מבצע'
     END::varchar,
     promotion_id, promotion_description, promotion_end_date,
@@ -287,9 +291,9 @@ BEGIN
     promo_kind,
     CASE promo_kind
       WHEN 'coupon'    THEN 'קופון'
-      WHEN 'club'      THEN 'הטבת מועדון'
-      WHEN 'card'      THEN 'הטבת אשראי'
-      WHEN 'insurance' THEN 'הטבת ביטוח'
+      WHEN 'club'      THEN 'מועדון'
+      WHEN 'card'      THEN 'אשראי'
+      WHEN 'insurance' THEN 'ביטוח'
       ELSE                  'מבצע'
     END::varchar,
     promotion_id, promotion_description, promotion_end_date,
@@ -383,7 +387,11 @@ AS $$
   FROM public.store_promotions_cache spc
   WHERE
     -- filtre ville (toujours requis)
-    spc.city ILIKE p_city || '%'
+    (
+      spc.city ILIKE p_city || '%'
+      OR spc.chain_id = '5144744100002'
+      OR (spc.chain_id = '7290027600007' AND spc.store_id = '413')
+    )
     -- filtre chaîne (optionnel)
     AND (p_chain_id IS NULL OR p_chain_id = '' OR spc.chain_id = p_chain_id)
     -- filtre magasin (optionnel)

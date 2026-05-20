@@ -606,7 +606,12 @@ def update_schema():
           ) pb ON TRUE
           WHERE p.item_code = p_item_code
             AND pp.price IS NOT NULL
-            AND (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
+            AND (
+              p_city IS NULL OR p_city = ''
+              OR s.city ILIKE p_city || '%'
+              OR s.chain_id = '5144744100002'
+              OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+            )
             AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
           ORDER BY LEAST(pp.price, COALESCE(pb.promo_price, pp.promo_price, pp.price)) ASC NULLS LAST, pp.updated_at DESC
           LIMIT GREATEST(COALESCE(p_limit, 300), 1)
@@ -677,7 +682,12 @@ def update_schema():
           filtered_stores AS (
             SELECT s.id, s.chain_id, s.store_id, s.store_name, s.city
             FROM stores s
-            WHERE (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
+            WHERE (
+              p_city IS NULL OR p_city = ''
+              OR s.city ILIKE p_city || '%'
+              OR s.chain_id = '5144744100002'
+              OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+            )
               AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
           )
           SELECT
@@ -745,7 +755,7 @@ def update_schema():
           WITH scoped_store_promos AS (
             SELECT
               s.id AS store_db_id,
-              s.city::TEXT AS city,
+              COALESCE(NULLIF(s.city, ''), 'Online')::TEXT AS city,
               s.chain_id::TEXT AS chain_id,
               s.chain_name::TEXT AS chain_name,
               s.store_id::TEXT AS store_id,
@@ -837,7 +847,11 @@ def update_schema():
             LEFT JOIN promotions pr
               ON pr.chain_id = psi.chain_id
              AND pr.promotion_id = psi.promotion_id
-            WHERE COALESCE(s.city, '') <> ''
+            WHERE (
+                COALESCE(s.city, '') <> ''
+                OR s.chain_id = '5144744100002'
+                OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+              )
               AND psi.promo_price IS NOT NULL
               AND psi.promo_price > 0
               AND (psi.promotion_end_date IS NULL OR psi.promotion_end_date >= CURRENT_DATE)
@@ -1246,7 +1260,12 @@ def update_schema():
           FROM top_promotions_cache c
           WHERE c.window_hours = v_window_hours
             AND c.scope_type = v_scope
-            AND (p_city IS NULL OR p_city = '' OR c.city ILIKE p_city || '%')
+            AND (
+              p_city IS NULL OR p_city = ''
+              OR c.city ILIKE p_city || '%'
+              OR c.chain_id = '5144744100002'
+              OR (c.chain_id = '7290027600007' AND c.store_id = '413')
+            )
             AND (v_scope <> 'chain' OR c.chain_id = v_chain_id)
             AND (v_scope <> 'store' OR c.store_id = v_store_id)
             AND (v_scope <> 'store' OR v_chain_id = '' OR c.chain_id = v_chain_id)

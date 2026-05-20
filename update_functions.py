@@ -425,7 +425,12 @@ def update_functions():
           ) pb ON TRUE
           WHERE p.item_code = p_item_code
             AND pp.price IS NOT NULL
-            AND (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
+            AND (
+              p_city IS NULL OR p_city = ''
+              OR s.city ILIKE p_city || '%'
+              OR s.chain_id = '5144744100002'
+              OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+            )
             AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
             AND (p_chain_name IS NULL OR p_chain_name = '' OR s.chain_name ILIKE p_chain_name)
           ORDER BY LEAST(pp.price, COALESCE(pb.promo_price, pp.promo_price, pp.price)) ASC NULLS LAST, pp.updated_at DESC
@@ -501,7 +506,12 @@ def update_functions():
           filtered_stores AS (
             SELECT s.id, s.chain_id, s.store_id, s.store_name, s.city
             FROM stores s
-            WHERE (p_city IS NULL OR p_city = '' OR s.city ILIKE p_city || '%')
+            WHERE (
+              p_city IS NULL OR p_city = ''
+              OR s.city ILIKE p_city || '%'
+              OR s.chain_id = '5144744100002'
+              OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+            )
               AND (p_chain_id IS NULL OR p_chain_id = '' OR s.chain_id = p_chain_id)
               AND (p_chain_name IS NULL OR p_chain_name = '' OR s.chain_name ILIKE p_chain_name)
           )
@@ -579,7 +589,7 @@ def update_functions():
           WITH scoped_store_promos AS (
             SELECT
               s.id AS store_db_id,
-              s.city::TEXT AS city,
+              COALESCE(NULLIF(s.city, ''), 'Online')::TEXT AS city,
               s.chain_id::TEXT AS chain_id,
               s.chain_name::TEXT AS chain_name,
               s.store_id::TEXT AS store_id,
@@ -645,7 +655,11 @@ def update_functions():
             JOIN product_prices pp ON pp.product_id = psi.product_id AND pp.store_id = psi.store_id
             JOIN products p ON p.id = psi.product_id
             LEFT JOIN promotions promo_meta ON promo_meta.chain_id = psi.chain_id AND promo_meta.promotion_id = psi.promotion_id
-            WHERE COALESCE(s.city, '') <> ''
+            WHERE (
+                COALESCE(s.city, '') <> ''
+                OR s.chain_id = '5144744100002'
+                OR (s.chain_id = '7290027600007' AND s.store_id = '413')
+              )
               AND psi.promo_price IS NOT NULL
               AND psi.promo_price > 0
               AND pp.price IS NOT NULL
@@ -888,7 +902,12 @@ def update_functions():
             WHERE c.window_hours = v_window_hours
               AND c.scope_type = 'store'
               AND c.has_image IS TRUE
-              AND (p_city IS NULL OR p_city = '' OR c.city = p_city)
+              AND (
+                p_city IS NULL OR p_city = ''
+                OR c.city = p_city
+                OR c.chain_id = '5144744100002'
+                OR (c.chain_id = '7290027600007' AND c.store_id = '413')
+              )
               AND (v_chain_id = '' OR c.chain_id = v_chain_id)
               AND (v_store_id = '' OR c.store_id = v_store_id)
               AND (p_chain_name IS NULL OR p_chain_name = '' OR lower(c.chain_name) = lower(p_chain_name))

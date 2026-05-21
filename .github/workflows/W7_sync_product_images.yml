@@ -1,8 +1,11 @@
 name: "W7 · Sync Product Images"
 
-# Workflow volontairement manuel uniquement.
+# Synchronise les images produit automatiquement toutes les 8h.
+# Peut aussi être déclenché manuellement avec des options de maintenance.
 
 on:
+  schedule:
+    - cron: "0 */8 * * *"
   workflow_dispatch:
     inputs:
       reset_all_to_null:

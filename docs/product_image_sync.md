@@ -16,7 +16,11 @@ python sync_product_images.py
 
 - `sync_product_images.py` : le workflow manuel
 - `scripts/add_products_has_image.sql` : migration one-shot dédiée
-- `.github/workflows/W7_sync_product_images.yml` : lancement manuel depuis GitHub Actions
+- `.github/workflows/W7_sync_product_images.yml` : lancement manuel ou automatique toutes les 8h depuis GitHub Actions
+
+Le workflow `W7` utilise un groupe `concurrency` dédié avec `cancel-in-progress: false` :
+si un nouveau déclenchement arrive alors que le précédent n'est pas terminé, GitHub Actions
+le garde en attente au lieu de lancer deux synchronisations en parallèle.
 
 Ordre du workflow :
 

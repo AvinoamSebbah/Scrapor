@@ -16,11 +16,15 @@ python sync_product_images.py
 
 - `sync_product_images.py` : le workflow manuel
 - `scripts/add_products_has_image.sql` : migration one-shot dédiée
-- `.github/workflows/W7_sync_product_images.yml` : lancement manuel ou automatique toutes les 8h depuis GitHub Actions
+- `.github/workflows/W7_sync_product_images.yml` : lancement manuel ou automatique une fois par jour à 03:00 `Asia/Jerusalem` depuis GitHub Actions
 
 Le workflow `W7` utilise un groupe `concurrency` dédié avec `cancel-in-progress: false` :
 si un nouveau déclenchement arrive alors que le précédent n'est pas terminé, GitHub Actions
 le garde en attente au lieu de lancer deux synchronisations en parallèle.
+
+Comme GitHub Actions planifie les crons en UTC, `W7` déclare les créneaux `00:00 UTC`
+et `01:00 UTC`, puis une garde exécute seulement celui qui correspond à 03:00
+en heure locale `Asia/Jerusalem` (été ou hiver).
 
 Ordre du workflow :
 

@@ -133,16 +133,15 @@ def update_functions():
             DELETE FROM promotion_store_items WHERE chain_id = p_chain_id;
           END IF;
 
-          WITH promo_pairs AS (
+          WITH promo_items AS (
             SELECT
               p.chain_id,
               p.promotion_id,
               p.promotion_end_date,
-              sid_txt.sid::INT AS store_id,
+              p.available_in_store_ids,
               item.item_code,
               item.promo_price_num
             FROM promotions p
-            JOIN LATERAL unnest(COALESCE(p.available_in_store_ids, '{}')) AS sid_txt(sid) ON TRUE
             JOIN LATERAL (
               SELECT
                 COALESCE(q.obj->>'itemcode', q.obj->>'ItemCode') AS item_code,
@@ -286,6 +285,8 @@ def update_functions():
               ) metrics
             ) AS item ON TRUE
             WHERE (p_chain_id IS NULL OR p_chain_id = '' OR p.chain_id = p_chain_id)
+              AND (p.promotion_start_date IS NULL OR p.promotion_start_date <= CURRENT_DATE)
+              AND (p.promotion_end_date IS NULL OR p.promotion_end_date >= CURRENT_DATE)
               AND item.item_code IS NOT NULL
               AND item.promo_price_num IS NOT NULL
               AND item.promo_price_num > 0
@@ -294,20 +295,21 @@ def update_functions():
             chain_id, promotion_id, product_id, store_id, promo_price, promotion_end_date, updated_at
           )
           SELECT
-            pp.chain_id,
-            pp.promotion_id,
+            pi.chain_id,
+            pi.promotion_id,
             pr.id AS product_id,
-            pp.store_id,
-            MIN(pp.promo_price_num) AS promo_price,
-            pp.promotion_end_date,
+            ppx.store_id,
+            MIN(pi.promo_price_num) AS promo_price,
+            pi.promotion_end_date,
             NOW()
-          FROM promo_pairs pp
-          JOIN products pr ON pr.item_code = pp.item_code
-          GROUP BY pp.chain_id, pp.promotion_id, pr.id, pp.store_id, pp.promotion_end_date
-          ON CONFLICT (chain_id, promotion_id, product_id, store_id) DO UPDATE SET
-            promo_price = EXCLUDED.promo_price,
-            promotion_end_date = EXCLUDED.promotion_end_date,
-            updated_at = NOW();
+          FROM promo_items pi
+          JOIN products pr ON pr.item_code = pi.item_code
+          JOIN LATERAL unnest(COALESCE(pi.available_in_store_ids, '{}')) AS sid(store_id_text) ON TRUE
+          JOIN product_prices ppx ON ppx.product_id = pr.id AND ppx.store_id = sid.store_id_text::INT
+          WHERE ppx.price IS NOT NULL
+            AND ppx.price > 0
+            AND pi.promo_price_num < ppx.price
+          GROUP BY pi.chain_id, pi.promotion_id, pr.id, ppx.store_id, pi.promotion_end_date;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;
           RETURN affected_rows;
@@ -1122,7 +1124,16 @@ def update_functions():
             discounted_price_per_mida = EXCLUDED.discounted_price_per_mida,
             weight_unit               = EXCLUDED.weight_unit,
             club_id                   = EXCLUDED.club_id,
-            items                     = EXCLUDED.items,
+            items                     = CASE
+              WHEN promotions.items IS NULL OR promotions.items = '[]'::jsonb THEN EXCLUDED.items
+              WHEN EXCLUDED.items IS NULL OR EXCLUDED.items = '[]'::jsonb THEN promotions.items
+              WHEN promotions.items = EXCLUDED.items THEN promotions.items
+              WHEN jsonb_typeof(promotions.items) = 'array' AND jsonb_typeof(EXCLUDED.items) = 'array' THEN (
+                SELECT COALESCE(jsonb_agg(DISTINCT merged.value), '[]'::jsonb)
+                FROM jsonb_array_elements(promotions.items || EXCLUDED.items) AS merged(value)
+              )
+              ELSE EXCLUDED.items
+            END,
             updated_at                = NOW();
         END;
         $$;

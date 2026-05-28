@@ -1,5 +1,6 @@
 ﻿"""PostgreSQL implementation of the short-term database uploader."""
 
+import ast
 import json
 import math
 import os
@@ -118,6 +119,92 @@ class PostgresUploader(ShortTermDatabaseUploader):
         if isinstance(value, (dict, list)):
             return Json(value)
         return value
+
+    @staticmethod
+    def _parse_structured_value(value):
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+
+        s_val = str(value).strip()
+        if not s_val or s_val.lower() in {"nan", "none", "null", "no_body"}:
+            return None
+
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                return parser(s_val)
+            except Exception:
+                continue
+
+        try:
+            json_str = s_val.replace("'", '"').replace("None", "null")
+            return json.loads(json_str)
+        except Exception:
+            return None
+
+    def _get_promo_val(self, content, details, *keys, default=None):
+        for source in (content, details):
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                val = self._get_val(source, key)
+                if val is None:
+                    continue
+                if isinstance(val, str) and (not val.strip() or val.strip().lower() == "nan"):
+                    continue
+                return val
+        return default
+
+    def _build_promo_item_from_row(self, content, details):
+        item_code = self._clean_id(self._get_promo_val(content, details, "ItemCode", "itemcode"))
+        if not item_code:
+            return None
+
+        fields = {
+            "itemcode": item_code,
+            "isgiftitem": self._get_promo_val(content, details, "IsGiftItem", "isgiftitem"),
+            "rewardtype": self._get_promo_val(content, details, "RewardType", "rewardtype"),
+            "minqty": self._get_promo_val(content, details, "MinQty", "minqty"),
+            "maxqty": self._get_promo_val(content, details, "MaxQty", "maxqty"),
+            "discountrate": self._get_promo_val(content, details, "DiscountRate", "discountrate"),
+            "discounttype": self._get_promo_val(content, details, "DiscountType", "discounttype"),
+            "discountedprice": self._get_promo_val(content, details, "DiscountedPrice", "discountedprice"),
+            "discountedpricepermida": self._get_promo_val(
+                content, details, "DiscountedPricePerMida", "discountedpricepermida"
+            ),
+            "bisweighted": self._get_promo_val(content, details, "bIsWeighted", "bisweighted", "isWeightedPromo"),
+        }
+        return {
+            key: val
+            for key, val in fields.items()
+            if val is not None and not (isinstance(val, str) and not val.strip())
+        }
+
+    @staticmethod
+    def _append_unique_promo_items(existing, incoming):
+        if not incoming:
+            return existing or []
+        if not existing:
+            return incoming
+
+        existing_items = existing if isinstance(existing, list) else [existing]
+        incoming_items = incoming if isinstance(incoming, list) else [incoming]
+        seen = {
+            json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            for item in existing_items
+        }
+        changed = False
+        for item in incoming_items:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            if key not in seen:
+                existing_items.append(item)
+                seen.add(key)
+                changed = True
+
+        if isinstance(existing, list) or isinstance(incoming, list) or changed:
+            return existing_items
+        return existing
 
     @staticmethod
     def _to_numeric(value):
@@ -960,8 +1047,11 @@ class PostgresUploader(ShortTermDatabaseUploader):
         pairs = set()
         for item in items:
             content = item.get("content", {})
-            chain_id = self._clean_id(self._get_val(content, "ChainId"))
-            store_id = self._clean_id(self._get_val(content, "StoreId"))
+            details = self._parse_structured_value(
+                self._get_val(content, "promotiondetails") or self._get_val(content, "PromotionDetails")
+            ) or {}
+            chain_id = self._clean_id(self._get_promo_val(content, details, "ChainId", "chainid"))
+            store_id = self._clean_id(self._get_promo_val(content, details, "StoreId", "storeid"))
             if chain_id and store_id:
                 pairs.add((chain_id, store_id))
         db_id_map = self._resolve_store_db_ids(pairs)
@@ -972,9 +1062,14 @@ class PostgresUploader(ShortTermDatabaseUploader):
 
         for item in items:
             content = item.get("content", {})
-            chain_id = self._clean_id(self._get_val(content, "ChainId"))
-            store_id = self._clean_id(self._get_val(content, "StoreId"))
-            promotion_id = self._clean_id(self._get_val(content, "PromotionId"))
+            details = self._parse_structured_value(
+                self._get_val(content, "promotiondetails") or self._get_val(content, "PromotionDetails")
+            ) or {}
+            chain_id = self._clean_id(self._get_promo_val(content, details, "ChainId", "chainid"))
+            store_id = self._clean_id(self._get_promo_val(content, details, "StoreId", "storeid"))
+            promotion_id = self._clean_id(
+                self._get_promo_val(content, details, "PromotionId", "promotionid")
+            )
 
             if not chain_id or not store_id or not promotion_id:
                 continue
@@ -982,75 +1077,134 @@ class PostgresUploader(ShortTermDatabaseUploader):
             db_store_key = str(db_id_map.get((chain_id, store_id), store_id))
             key = (chain_id, promotion_id)
             store_promo_val = (
-                self._get_val(content, "MinNoOfItemOffered")
-                or self._get_val(content, "minnoofitemoffered")
-                or self._get_val(content, "MinQty")
+                self._get_promo_val(
+                    content,
+                    details,
+                    "MinNoOfItemOffered",
+                    "minnoofitemoffered",
+                    "minnoofitemofered",
+                    "MinQty",
+                    "minqty",
+                )
                 or "active"
             )
 
-            if key not in aggregated:
-                promotion_items = self._get_val(content, "groups") or self._get_val(content, "PromotionItems") or []
-                if isinstance(promotion_items, str):
-                    try:
-                        json_str = promotion_items.replace("'", '"').replace("None", "null")
-                        promotion_items = json.loads(json_str)
-                    except Exception:
-                        promotion_items = []
+            promotion_items = self._parse_structured_value(
+                self._get_promo_val(content, details, "groups", "PromotionItems", "promotionitems")
+            )
+            if not promotion_items:
+                promo_item = self._build_promo_item_from_row(content, details)
+                promotion_items = [promo_item] if promo_item else []
 
-                aggregated[key] = {
-                    "chain_id": chain_id,
-                    "promotion_id": promotion_id,
-                    "sub_chain_id": self._clean_id(self._get_val(content, "SubChainId")),
-                    "bikoret_no": self._clean_id(self._get_val(content, "BikoretNo")),
-                    "promotion_description": self._get_val(content, "PromotionDescription"),
-                    "promotion_update_date": self._normalize_date(
-                        self._get_val(content, "promotionupdatetime")
-                        or self._get_val(content, "PromotionUpdateDate"),
-                        now.strftime("%Y-%m-%d"),
+            row = {
+                "chain_id": chain_id,
+                "promotion_id": promotion_id,
+                "sub_chain_id": self._clean_id(
+                    self._get_promo_val(content, details, "SubChainId", "subchainid")
+                ),
+                "bikoret_no": self._clean_id(self._get_promo_val(content, details, "BikoretNo", "bikoretno")),
+                "promotion_description": self._get_promo_val(
+                    content, details, "PromotionDescription", "promotiondescription"
+                ),
+                "promotion_update_date": self._normalize_date(
+                    self._get_promo_val(
+                        content,
+                        details,
+                        "promotionupdatetime",
+                        "PromotionUpdateDate",
+                        "priceupdatedate",
+                        "PriceUpdateDate",
                     ),
-                    "promotion_start_date": self._normalize_date(
-                        self._get_val(content, "promotionstartdatetime")
-                        or self._get_val(content, "PromotionStartDate"),
-                        now.strftime("%Y-%m-%d"),
+                    now.strftime("%Y-%m-%d"),
+                ),
+                "promotion_start_date": self._normalize_date(
+                    self._get_promo_val(
+                        content,
+                        details,
+                        "promotionstartdatetime",
+                        "PromotionStartDate",
+                        "promotionstartdate",
                     ),
-                    "promotion_start_hour": self._get_val(content, "PromotionStartHour") or "00:00",
-                    "promotion_end_date": self._normalize_date(
-                        self._get_val(content, "promotionenddatetime")
-                        or self._get_val(content, "PromotionEndDate"),
-                        "2099-12-31",
+                    now.strftime("%Y-%m-%d"),
+                ),
+                "promotion_start_hour": self._get_promo_val(
+                    content, details, "PromotionStartHour", "promotionstarthour", default="00:00"
+                ),
+                "promotion_end_date": self._normalize_date(
+                    self._get_promo_val(
+                        content,
+                        details,
+                        "promotionenddatetime",
+                        "PromotionEndDate",
+                        "promotionenddate",
                     ),
-                    "promotion_end_hour": self._get_val(content, "PromotionEndHour") or "23:59",
-                    "promotion_days": self._get_val(content, "PromotionDays"),
-                    "redemption_limit": self._get_val(content, "RedemptionLimit"),
-                    "reward_type": self._get_val(content, "RewardType"),
-                    "allow_multiple_discounts": self._get_val(content, "AllowMultipleDiscounts"),
-                    "is_weighted_promo": bool(self._get_val(content, "isWeightedPromo", False)),
-                    "is_gift_item": self._get_val(content, "IsGiftItem"),
-                    "min_no_of_item_offered": (
-                        self._get_val(content, "MinNoOfItemOffered")
-                        or self._get_val(content, "minnoofitemoffered")
-                    ),
-                    "additional_is_coupon": self._get_val(content, "AdditionalIsCoupon"),
-                    "additional_gift_count": self._get_val(content, "AdditionalGiftCount"),
-                    "additional_is_total": self._get_val(content, "AdditionalIsTotal"),
-                    "additional_is_active": self._get_val(content, "AdditionalIsActive"),
-                    "additional_restrictions": self._get_val(content, "AdditionalRestrictions"),
-                    "remarks": self._get_val(content, "Remarks"),
-                    "min_qty": self._get_val(content, "MinQty"),
-                    "discounted_price": self._get_val(content, "DiscountedPrice"),
-                    "discounted_price_per_mida": self._get_val(content, "DiscountedPricePerMida"),
-                    "weight_unit": self._get_val(content, "WeightUnit"),
-                    "club_id": self._get_val(content, "ClubId"),
-                    "items": promotion_items,
-                    "store_promotions": {db_store_key: store_promo_val},
-                    "available_in_store_ids": [db_store_key],
-                    "created_at": now_iso,
-                    "updated_at": now_iso,
-                }
+                    "2099-12-31",
+                ),
+                "promotion_end_hour": self._get_promo_val(
+                    content, details, "PromotionEndHour", "promotionendhour", default="23:59"
+                ),
+                "promotion_days": self._get_promo_val(content, details, "PromotionDays", "promotiondays"),
+                "redemption_limit": self._get_promo_val(content, details, "RedemptionLimit", "redemptionlimit"),
+                "reward_type": self._get_promo_val(content, details, "RewardType", "rewardtype"),
+                "allow_multiple_discounts": self._get_promo_val(
+                    content, details, "AllowMultipleDiscounts", "allowmultiplediscounts"
+                ),
+                "is_weighted_promo": self._to_bool(
+                    self._get_promo_val(content, details, "isWeightedPromo", "bisweighted", "bIsWeighted"),
+                    False,
+                ),
+                "is_gift_item": self._get_promo_val(content, details, "IsGiftItem", "isgiftitem"),
+                "min_no_of_item_offered": self._get_promo_val(
+                    content, details, "MinNoOfItemOffered", "minnoofitemoffered", "minnoofitemofered"
+                ),
+                "additional_is_coupon": self._get_promo_val(
+                    content, details, "AdditionalIsCoupon", "additionaliscoupon"
+                ),
+                "additional_gift_count": self._get_promo_val(
+                    content, details, "AdditionalGiftCount", "additionalgiftcount"
+                ),
+                "additional_is_total": self._get_promo_val(
+                    content, details, "AdditionalIsTotal", "additionalistotal"
+                ),
+                "additional_is_active": self._get_promo_val(
+                    content, details, "AdditionalIsActive", "additionalisactive"
+                ),
+                "additional_restrictions": self._get_promo_val(
+                    content, details, "AdditionalRestrictions", "additionalrestrictions"
+                ),
+                "remarks": self._get_promo_val(content, details, "Remarks", "remarks"),
+                "min_qty": self._get_promo_val(content, details, "MinQty", "minqty"),
+                "discounted_price": self._get_promo_val(content, details, "DiscountedPrice", "discountedprice"),
+                "discounted_price_per_mida": self._get_promo_val(
+                    content, details, "DiscountedPricePerMida", "discountedpricepermida"
+                ),
+                "weight_unit": self._get_promo_val(content, details, "WeightUnit", "weightunit"),
+                "club_id": self._get_promo_val(content, details, "ClubId", "clubid"),
+                "items": promotion_items,
+                "store_promotions": {db_store_key: store_promo_val},
+                "available_in_store_ids": [db_store_key],
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+
+            if key not in aggregated:
+                aggregated[key] = row
             else:
                 aggregated[key]["store_promotions"][db_store_key] = store_promo_val
                 if db_store_key not in aggregated[key]["available_in_store_ids"]:
                     aggregated[key]["available_in_store_ids"].append(db_store_key)
+                aggregated[key]["items"] = self._append_unique_promo_items(
+                    aggregated[key].get("items"),
+                    promotion_items,
+                )
+                for field, value in row.items():
+                    if field in {"chain_id", "promotion_id", "items", "store_promotions", "available_in_store_ids"}:
+                        continue
+                    if field == "is_weighted_promo":
+                        aggregated[key][field] = bool(aggregated[key].get(field) or value)
+                        continue
+                    if aggregated[key].get(field) in (None, "") and value not in (None, ""):
+                        aggregated[key][field] = value
 
         if not aggregated:
             return

@@ -62,7 +62,7 @@ def _run_stores_cleanup(db_url=None):
 
 # Batch sizes tuned per table - promotions have many fields so smaller chunks
 _BATCH_SIZE_DEFAULT = 500
-_BATCH_SIZE_PROMOS = int(os.getenv("BATCH_SIZE_PROMOS", "200"))
+_BATCH_SIZE_PROMOS = int(os.getenv("BATCH_SIZE_PROMOS", "50"))
 _BATCH_SIZE_PRICES = 1000
 # Products are a hot table under concurrent load - smaller batches reduce lock time
 _BATCH_SIZE_PRODUCTS = 50

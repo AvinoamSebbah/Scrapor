@@ -105,6 +105,7 @@ jobs:
           OUTPUT_DESTINATION: postgres
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
+          BATCH_SIZE_PROMOS: '50'
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ inputs.store }}
           APP_DATA_PATH: ./app_data
@@ -125,6 +126,7 @@ jobs:
           OUTPUT_DESTINATION: postgres
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
+          BATCH_SIZE_PROMOS: '50'
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ inputs.store }}
           APP_DATA_PATH: ./app_data

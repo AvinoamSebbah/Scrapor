@@ -47,16 +47,20 @@ jobs:
         shell: bash
         run: |
           MAX_WAIT=7200   # 2h max d'attente
+          STALE_AFTER_HOURS=12
+          CUTOFF="$(date -u -d "${STALE_AFTER_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
           ELAPSED=0
           INTERVAL=60
-          echo "⏳  Vérification des W3 (uploads magasin) actifs ou en file…"
+          echo "⏳  Vérification des W3 (uploads magasin) actifs ou en file depuis ${CUTOFF}…"
+          count_recent_w3() {
+            local status="$1"
+            gh api "/repos/${{ github.repository }}/actions/workflows/W3_upload.yml/runs?status=${status}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.created_at >= \"$CUTOFF\")] | length"
+          }
           while true; do
-            IN_PROGRESS=$(gh api "/repos/${{ github.repository }}/actions/runs?status=in_progress&per_page=100" \
-              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
-            QUEUED=$(gh api "/repos/${{ github.repository }}/actions/runs?status=queued&per_page=100" \
-              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
-            WAITING=$(gh api "/repos/${{ github.repository }}/actions/runs?status=waiting&per_page=100" \
-              --jq '[.workflow_runs[] | select(.name | startswith("W3"))] | length')
+            IN_PROGRESS=$(count_recent_w3 in_progress)
+            QUEUED=$(count_recent_w3 queued)
+            WAITING=$(count_recent_w3 waiting)
             TOTAL=$((IN_PROGRESS + QUEUED + WAITING))
             if [ "$TOTAL" = "0" ]; then
               echo "✅  Aucun W3 actif — démarrage du refresh."

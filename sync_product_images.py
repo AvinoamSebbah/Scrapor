@@ -240,6 +240,34 @@ def _bulk_update_has_image(conn, item_codes: list[str], value: bool, dry_run: bo
     return updated
 
 
+def _sync_top_promotions_cache_has_image(conn, dry_run: bool) -> int:
+    """Copy products.has_image into the promotions cache after image sync."""
+    with conn.cursor() as cur:
+        if dry_run:
+            cur.execute(
+                """
+                SELECT COUNT(*)::int
+                FROM top_promotions_cache c
+                JOIN products p ON p.item_code = c.item_code
+                WHERE c.has_image IS DISTINCT FROM p.has_image
+                """
+            )
+            return int(cur.fetchone()[0])
+
+        cur.execute(
+            """
+            UPDATE top_promotions_cache c
+            SET has_image = p.has_image
+            FROM products p
+            WHERE p.item_code = c.item_code
+              AND c.has_image IS DISTINCT FROM p.has_image
+            """
+        )
+        updated = cur.rowcount
+    conn.commit()
+    return updated
+
+
 def _list_space_barcodes(s3_client, bucket: str) -> set[str]:
     found: set[str] = set()
     paginator = s3_client.get_paginator("list_objects_v2")
@@ -669,6 +697,13 @@ def main() -> None:
         )
         remote_stats.already_in_spaces = stats.already_in_spaces
         _print_summary(remote_stats, args.dry_run)
+
+        _banner("Synchronisation cache promotions")
+        cache_rows = _sync_top_promotions_cache_has_image(conn, args.dry_run)
+        print(
+            f"  {cache_rows} lignes top_promotions_cache "
+            f"{'seraient synchronisées' if args.dry_run else 'synchronisées'} depuis products.has_image"
+        )
     except Exception:
         conn.rollback()
         raise

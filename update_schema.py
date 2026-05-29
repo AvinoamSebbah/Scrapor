@@ -261,6 +261,8 @@ def update_schema():
           ON top_promotions_cache(window_hours, scope_type, city, chain_id, store_id, rank_position);
         CREATE INDEX IF NOT EXISTS idx_tpc_updated_at
           ON top_promotions_cache(window_hours, scope_type, city, chain_id, store_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tpc_chain_item_score_all
+          ON top_promotions_cache(window_hours, scope_type, city, chain_id, item_code, smart_score DESC NULLS LAST, rank_position);
         """)
         
         # Unique constraints on (chain_id, store_id), item_code, and file_name already
@@ -1458,8 +1460,36 @@ def update_schema():
               WHEN EXCLUDED.items IS NULL OR EXCLUDED.items = '[]'::jsonb THEN promotions.items
               WHEN promotions.items = EXCLUDED.items THEN promotions.items
               WHEN jsonb_typeof(promotions.items) = 'array' AND jsonb_typeof(EXCLUDED.items) = 'array' THEN (
-                SELECT COALESCE(jsonb_agg(DISTINCT merged.value), '[]'::jsonb)
-                FROM jsonb_array_elements(promotions.items || EXCLUDED.items) AS merged(value)
+                WITH merged AS (
+                  SELECT value AS item, ord::BIGINT AS ord, 0 AS source_rank
+                  FROM jsonb_array_elements(promotions.items) WITH ORDINALITY AS existing(value, ord)
+                  UNION ALL
+                  SELECT value AS item, (1000000 + ord)::BIGINT AS ord, 1 AS source_rank
+                  FROM jsonb_array_elements(EXCLUDED.items) WITH ORDINALITY AS incoming(value, ord)
+                ),
+                keyed AS (
+                  SELECT
+                    item,
+                    ord,
+                    source_rank,
+                    COALESCE(
+                      NULLIF(item->>'itemcode', ''),
+                      NULLIF(item->>'item_code', ''),
+                      NULLIF(item->>'ItemCode', ''),
+                      NULLIF(item->>'itemCode', ''),
+                      NULLIF(item->>'barcode', ''),
+                      NULLIF(item->>'Barcode', ''),
+                      item::TEXT
+                    ) AS dedupe_key
+                  FROM merged
+                ),
+                deduped AS (
+                  SELECT DISTINCT ON (dedupe_key) item, ord
+                  FROM keyed
+                  ORDER BY dedupe_key, source_rank DESC, ord ASC
+                )
+                SELECT COALESCE(jsonb_agg(item ORDER BY ord), '[]'::jsonb)
+                FROM deduped
               )
               ELSE EXCLUDED.items
             END,

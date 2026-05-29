@@ -193,14 +193,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           W3_MAX_IN_FLIGHT: '4'
         run: |
+          W2_CREATED_AT=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.created_at')
           # Hard cap W3 concurrency: wait until active W3 runs are below threshold.
           while true; do
-            IN_FLIGHT=$(gh run list \
-              --repo ${{ github.repository }} \
-              --workflow W3_upload.yml \
-              --limit 100 \
-              --json status \
-              --jq '[.[] | select(.status == "in_progress")] | length')
+            IN_FLIGHT=$(gh api "/repos/${{ github.repository }}/actions/workflows/W3_upload.yml/runs?per_page=100" \
+              --jq "[.workflow_runs[] | select(.created_at >= \"$W2_CREATED_AT\" and (.status == \"in_progress\" or .status == \"queued\" or .status == \"waiting\"))] | length")
 
             if [ "$IN_FLIGHT" -lt "$W3_MAX_IN_FLIGHT" ]; then
               break
@@ -231,14 +228,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Waiting for all W3_upload runs to complete..."
+          W2_CREATED_AT=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.created_at')
+          echo "Waiting for W3_upload runs from this W2 cycle (${W2_CREATED_AT}) to complete..."
           for i in $(seq 1 60); do
-            PENDING=$(gh run list \
-              --repo ${{ github.repository }} \
-              --workflow W3_upload.yml \
-              --limit 100 \
-              --json status \
-              --jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length')
+            PENDING=$(gh api "/repos/${{ github.repository }}/actions/workflows/W3_upload.yml/runs?per_page=100" \
+              --jq "[.workflow_runs[] | select(.created_at >= \"$W2_CREATED_AT\" and (.status == \"in_progress\" or .status == \"queued\" or .status == \"waiting\"))] | length")
 
             if [ "$PENDING" -eq 0 ]; then
               echo "All W3 runs complete (attempt $i)."
@@ -248,8 +242,8 @@ jobs:
             echo "W3 pending=$PENDING. Waiting 60s... (attempt $i/60)"
             sleep 60
           done
-          echo "Timeout after 60 min waiting for W3 runs. Proceeding anyway."
-          exit 0
+          echo "Timeout after 60 min waiting for W3 runs from this W2 cycle."
+          exit 1
 
       - name: Dispatch W6 price-drop notifications
         env:

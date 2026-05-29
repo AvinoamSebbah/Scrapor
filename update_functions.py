@@ -566,6 +566,7 @@ def update_functions():
         ALTER TABLE top_promotions_cache
           ADD COLUMN IF NOT EXISTS promotion_id VARCHAR DEFAULT NULL,
           ADD COLUMN IF NOT EXISTS promotion_description VARCHAR DEFAULT NULL,
+          ADD COLUMN IF NOT EXISTS min_qty VARCHAR DEFAULT NULL,
           ADD COLUMN IF NOT EXISTS promo_kind VARCHAR DEFAULT 'regular',
           ADD COLUMN IF NOT EXISTS promo_label VARCHAR DEFAULT 'מבצע',
           ADD COLUMN IF NOT EXISTS is_conditional_promo BOOLEAN DEFAULT FALSE;
@@ -634,7 +635,9 @@ def update_functions():
               psi.updated_at,
               psi.promotion_id::TEXT AS promotion_id,
               promo_meta.promotion_description::TEXT AS promotion_description,
+              promo_meta.min_qty::TEXT AS min_qty,
               CASE
+                WHEN promo_meta.promotion_description ILIKE '%פיצוי%' THEN 'coupon'
                 WHEN promo_meta.promotion_description ILIKE '%ביטוח%' THEN 'insurance'
                 WHEN promo_meta.promotion_description ILIKE ANY(ARRAY['%אשראי%','%כרטיס%','%ויזה%','%מאסטר%','%אמקס%','%visa%','%mastercard%']) THEN 'card'
                 WHEN (
@@ -736,6 +739,7 @@ def update_functions():
               d.updated_at,
               d.promotion_id,
               d.promotion_description,
+              d.min_qty,
               d.promo_kind_computed
             FROM deduped d
             WHERE d.dedupe_rank = 1
@@ -765,6 +769,7 @@ def update_functions():
             updated_at,
             promotion_id,
             promotion_description,
+            min_qty,
             promo_kind,
             promo_label,
             is_conditional_promo,
@@ -795,13 +800,19 @@ def update_functions():
             q.updated_at,
             q.promotion_id,
             q.promotion_description,
+            q.min_qty,
             COALESCE(q.promo_kind_computed, 'regular') AS promo_kind,
-            CASE COALESCE(q.promo_kind_computed, 'regular')
+            CASE
+              WHEN COALESCE(q.promo_kind_computed, 'regular') = 'coupon'
+                AND q.promotion_description ILIKE '%פיצוי%'
+              THEN 'פיצוי'
+              ELSE CASE COALESCE(q.promo_kind_computed, 'regular')
               WHEN 'coupon'    THEN 'קופון'
               WHEN 'card'      THEN 'הטבת אשראי'
               WHEN 'club'      THEN 'הטבת מועדון'
               WHEN 'insurance' THEN 'הטבת ביטוח'
               ELSE 'מבצע'
+              END
             END AS promo_label,
             (COALESCE(q.promo_kind_computed, 'regular') <> 'regular') AS is_conditional_promo,
             NOW()
@@ -866,6 +877,7 @@ def update_functions():
           updated_at TIMESTAMP,
           promotion_id TEXT,
           promotion_description TEXT,
+          min_qty TEXT,
           promo_kind TEXT,
           promo_label TEXT,
           is_conditional_promo BOOLEAN,
@@ -948,6 +960,7 @@ def update_functions():
             b.updated_at,
             COALESCE(b.promotion_id, '')::TEXT AS promotion_id,
             COALESCE(b.promotion_description, '')::TEXT AS promotion_description,
+            COALESCE(b.min_qty, '')::TEXT AS min_qty,
             COALESCE(b.promo_kind, 'regular')::TEXT AS promo_kind,
             COALESCE(b.promo_label, 'מבצע')::TEXT AS promo_label,
             COALESCE(b.is_conditional_promo, FALSE) AS is_conditional_promo,

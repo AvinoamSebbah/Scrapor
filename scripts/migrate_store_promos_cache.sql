@@ -55,6 +55,7 @@ CREATE TABLE public.store_promotions_cache (
   promo_label         varchar,                  -- libellé hébreu affiché au front
   promotion_id        varchar,
   promotion_description varchar,
+  min_qty             varchar,
   promotion_end_date  date,
 
   -- Horodatage
@@ -116,6 +117,7 @@ BEGIN
 
       -- Type de promo : 'conditional' si coupon / club / carte / assurance
       CASE
+        WHEN LOWER(COALESCE(prom.promotion_description,'')) LIKE '%פיצוי%' THEN 'conditional'
         WHEN COALESCE(prom.additional_is_coupon,'') IN ('1','true','t','yes','y') THEN 'conditional'
         WHEN prom.club_id IS NOT NULL
           AND LOWER(TRIM(COALESCE(prom.club_id,''))) NOT IN ('','0','0.0','no_body','none','null','nan')
@@ -128,6 +130,8 @@ BEGIN
 
       -- Kind détaillé pour le label hébreu
       CASE
+        WHEN LOWER(COALESCE(prom.promotion_description,'')) LIKE '%פיצוי%'
+          THEN 'coupon'
         WHEN COALESCE(prom.additional_is_coupon,'') IN ('1','true','t','yes','y')
           THEN 'coupon'
         WHEN LOWER(COALESCE(prom.promotion_description,'')) LIKE '%קופון%'
@@ -176,6 +180,7 @@ BEGIN
       -- Méta promotion
       psi.promotion_id::varchar,
       prom.promotion_description::varchar,
+      prom.min_qty::varchar,
       psi.promotion_end_date,
       psi.updated_at
 
@@ -257,7 +262,7 @@ BEGIN
     item_code, item_name, manufacturer_name, unit_of_measure, unit_qty, b_is_weighted,
     price, promo_price, effective_price, discount_amount, discount_percent, smart_score,
     promo_kind, promo_label,
-    promotion_id, promotion_description, promotion_end_date,
+    promotion_id, promotion_description, min_qty, promotion_end_date,
     updated_at, refreshed_at
   )
 
@@ -269,13 +274,13 @@ BEGIN
     price, promo_price, effective_price, discount_amount, discount_percent, smart_score,
     promo_kind,
     CASE promo_kind
-      WHEN 'coupon'    THEN 'קופון'
+      WHEN 'coupon'    THEN CASE WHEN promotion_description ILIKE '%פיצוי%' THEN 'פיצוי' ELSE 'קופון' END
       WHEN 'club'      THEN 'מועדון'
       WHEN 'card'      THEN 'אשראי'
       WHEN 'insurance' THEN 'ביטוח'
       ELSE                  'מבצע'
     END::varchar,
-    promotion_id, promotion_description, promotion_end_date,
+    promotion_id, promotion_description, min_qty, promotion_end_date,
     updated_at, NOW()
   FROM ranked_pct
   WHERE rn <= 25
@@ -290,13 +295,13 @@ BEGIN
     price, promo_price, effective_price, discount_amount, discount_percent, smart_score,
     promo_kind,
     CASE promo_kind
-      WHEN 'coupon'    THEN 'קופון'
+      WHEN 'coupon'    THEN CASE WHEN promotion_description ILIKE '%פיצוי%' THEN 'פיצוי' ELSE 'קופון' END
       WHEN 'club'      THEN 'מועדון'
       WHEN 'card'      THEN 'אשראי'
       WHEN 'insurance' THEN 'ביטוח'
       ELSE                  'מבצע'
     END::varchar,
-    promotion_id, promotion_description, promotion_end_date,
+    promotion_id, promotion_description, min_qty, promotion_end_date,
     updated_at, NOW()
   FROM ranked_savings
   WHERE rn <= 25;
@@ -348,6 +353,7 @@ RETURNS TABLE (
   promo_label         varchar,
   promotion_id        varchar,
   promotion_description varchar,
+  min_qty             varchar,
   promotion_end_date  date,
   updated_at          timestamp without time zone
 )
@@ -382,6 +388,7 @@ AS $$
     spc.promo_label,
     spc.promotion_id,
     spc.promotion_description,
+    spc.min_qty,
     spc.promotion_end_date,
     spc.updated_at
   FROM public.store_promotions_cache spc

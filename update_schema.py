@@ -250,6 +250,7 @@ def update_schema():
           ADD COLUMN IF NOT EXISTS b_is_weighted BOOLEAN DEFAULT false,
           ADD COLUMN IF NOT EXISTS promotion_id VARCHAR,
           ADD COLUMN IF NOT EXISTS promotion_description TEXT,
+          ADD COLUMN IF NOT EXISTS min_qty VARCHAR,
           ADD COLUMN IF NOT EXISTS promo_kind VARCHAR DEFAULT 'regular',
           ADD COLUMN IF NOT EXISTS promo_label VARCHAR DEFAULT 'מבצע',
           ADD COLUMN IF NOT EXISTS is_conditional_promo BOOLEAN DEFAULT false,
@@ -777,6 +778,8 @@ def update_schema():
               pr.additional_restrictions,
               pr.remarks,
               CASE
+                WHEN COALESCE(pr.promotion_description, '') ILIKE '%פיצוי%'
+                THEN 'coupon'
                 WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
                   OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
                 THEN 'coupon'
@@ -797,7 +800,8 @@ def update_schema():
                 ELSE 'regular'
               END AS promo_kind,
               CASE
-                WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
+                WHEN COALESCE(pr.promotion_description, '') ILIKE '%פיצוי%'
+                  OR COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
                   OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
                   OR (
                     COALESCE(BTRIM(pr.club_id), '') <> ''
@@ -808,6 +812,8 @@ def update_schema():
                 ELSE FALSE
               END AS is_conditional_promo,
               CASE
+                WHEN COALESCE(pr.promotion_description, '') ILIKE '%פיצוי%'
+                THEN 'פיצוי'
                 WHEN COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
                   OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
                 THEN 'קופון'
@@ -832,6 +838,8 @@ def update_schema():
                 ORDER BY
                   CASE
                     WHEN (
+                      COALESCE(pr.promotion_description, '') ILIKE '%פיצוי%'
+                      OR
                       COALESCE(pr.additional_restrictions, '') ILIKE '%additionaliscoupon'': ''1''%'
                       OR COALESCE(pr.promotion_description, '') ILIKE '%קופון%'
                       OR (
@@ -895,6 +903,7 @@ def update_schema():
               p.manufacturer_name::TEXT AS manufacturer_name,
               lsp.promotion_id,
               lsp.promotion_description,
+              lsp.min_qty,
               lsp.promo_kind,
               lsp.promo_label,
               lsp.is_conditional_promo,
@@ -989,6 +998,7 @@ def update_schema():
               d.manufacturer_name,
               d.promotion_id,
               d.promotion_description,
+              d.min_qty,
               d.promo_kind,
               d.promo_label,
               d.is_conditional_promo,
@@ -1023,6 +1033,7 @@ def update_schema():
               d.manufacturer_name,
               d.promotion_id,
               d.promotion_description,
+              d.min_qty,
               d.promo_kind,
               d.promo_label,
               d.is_conditional_promo,
@@ -1077,6 +1088,7 @@ def update_schema():
               d.manufacturer_name,
               d.promotion_id,
               d.promotion_description,
+              d.min_qty,
               d.promo_kind,
               d.promo_label,
               d.is_conditional_promo,
@@ -1115,6 +1127,7 @@ def update_schema():
             manufacturer_name,
             promotion_id,
             promotion_description,
+            min_qty,
             promo_kind,
             promo_label,
             is_conditional_promo,
@@ -1145,6 +1158,7 @@ def update_schema():
             q.manufacturer_name,
             q.promotion_id,
             q.promotion_description,
+            q.min_qty,
             q.promo_kind,
             q.promo_label,
             q.is_conditional_promo,

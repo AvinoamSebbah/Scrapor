@@ -375,19 +375,11 @@ def update_schema():
                           AND metrics.promotion_discounted_price_num IS NOT NULL
                           AND metrics.promotion_discounted_price_num >= 1
                         THEN NULL
-                        WHEN metrics.item_min_qty_num IS NOT NULL
-                          AND metrics.item_min_qty_num >= 2
-                          AND metrics.item_min_qty_num = TRUNC(metrics.item_min_qty_num)
-                        THEN metrics.item_discounted_price_num / metrics.item_min_qty_num
                         ELSE metrics.item_discounted_price_num
                       END,
                       CASE
                         WHEN metrics.promotion_discounted_price_num IS NULL THEN NULL
                         WHEN metrics.promotion_discounted_price_num <= 0 THEN NULL
-                        WHEN metrics.item_min_qty_num IS NOT NULL
-                          AND metrics.item_min_qty_num >= 2
-                          AND metrics.item_min_qty_num = TRUNC(metrics.item_min_qty_num)
-                        THEN metrics.promotion_discounted_price_num / metrics.item_min_qty_num
                         ELSE metrics.promotion_discounted_price_num
                       END
                     )

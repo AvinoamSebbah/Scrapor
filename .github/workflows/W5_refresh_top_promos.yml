@@ -1,12 +1,12 @@
 name: "W5 · Nightly Refresh Top Promotions"
 
-# Rafraîchit top_promotions_cache chaque nuit à 1h UTC.
+# Rafraîchit top_promotions_cache chaque jour à 4h UTC.
 # Lance uniquement le cache all-time.
 # Peut aussi être déclenché manuellement.
 
 on:
   schedule:
-    - cron: '0 1 * * *'   # 1h00 UTC chaque nuit
+    - cron: '0 4 * * *'   # 4h00 UTC chaque jour
   workflow_dispatch:
     inputs:
       top_n:
@@ -38,43 +38,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Wait for active W3 uploads to finish
-        # Attend que tous les W3 (uploads par magasin) soient terminés avant de
-        # toucher top_promotions_cache — évite les deadlocks DB en cas d'écriture
-        # concurrente sur les tables sources pendant le refresh.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          MAX_WAIT=7200   # 2h max d'attente
-          STALE_AFTER_HOURS=12
-          CUTOFF="$(date -u -d "${STALE_AFTER_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
-          ELAPSED=0
-          INTERVAL=60
-          echo "⏳  Vérification des W3 (uploads magasin) actifs ou en file depuis ${CUTOFF}…"
-          count_recent_w3() {
-            local status="$1"
-            gh api "/repos/${{ github.repository }}/actions/workflows/W3_upload.yml/runs?status=${status}&per_page=100" \
-              --jq "[.workflow_runs[] | select(.created_at >= \"$CUTOFF\")] | length"
-          }
-          while true; do
-            IN_PROGRESS=$(count_recent_w3 in_progress)
-            QUEUED=$(count_recent_w3 queued)
-            WAITING=$(count_recent_w3 waiting)
-            TOTAL=$((IN_PROGRESS + QUEUED + WAITING))
-            if [ "$TOTAL" = "0" ]; then
-              echo "✅  Aucun W3 actif — démarrage du refresh."
-              break
-            fi
-            echo "   ${IN_PROGRESS} W3 en cours · ${QUEUED} en file · ${WAITING} en attente — retry dans ${INTERVAL}s (${ELAPSED}s écoulés)"
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-            if [ $ELAPSED -ge $MAX_WAIT ]; then
-              echo "❌  Timeout (${MAX_WAIT}s) en attendant la fin des W3 — abandon du refresh."
-              exit 1
-            fi
-          done
-
       - name: Open PostgreSQL SSH tunnel
         uses: ./.github/actions/open-postgres-tunnel
         with:
@@ -83,7 +46,7 @@ jobs:
           ssh-port: ${{ secrets.DO_PORT }}
           ssh-private-key: ${{ secrets.DO_SSH_KEY }}
 
-      - name: Refresh top promotions cache
+      - name: Refresh top promotions cache (up to 3 attempts)
         env:
           PYTHONUNBUFFERED: '1'
           PYTHONIOENCODING: 'utf-8'
@@ -92,4 +55,21 @@ jobs:
           BACKEND_API_URL: 'https://api.agali.live'
         run: |
           TOP_N="${{ inputs.top_n || '300' }}"
-          python refresh_top_promos.py --top-n "$TOP_N" --window-hours 0
+          MAX_ATTEMPTS=3
+          RETRY_DELAY_SECONDS=600
+
+          for attempt in 1 2 3; do
+            echo "Refresh top promotions cache - tentative ${attempt}/${MAX_ATTEMPTS}"
+            if python refresh_top_promos.py --top-n "$TOP_N" --window-hours 0; then
+              echo "Refresh top promotions cache terminé avec succès."
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Échec de la tentative ${attempt}/${MAX_ATTEMPTS} - nouvelle tentative dans ${RETRY_DELAY_SECONDS}s."
+              sleep "$RETRY_DELAY_SECONDS"
+            fi
+          done
+
+          echo "Le refresh a échoué après ${MAX_ATTEMPTS} tentatives."
+          exit 1

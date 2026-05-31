@@ -477,6 +477,24 @@ def _rerank(conn, window_hours: int, top_n: int):
     print(f"  Re-rank effectué (quota final: {standard_limit} standard + {coupon_limit} coupon-like)")
 
 
+def _purge_non_all_time_windows(conn, keep_window: int = 0) -> int:
+    """Remove legacy top cache partitions now that promotions are all-time only."""
+    _banner("Nettoyage fenêtres legacy")
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM top_promotions_cache WHERE window_hours <> %s",
+            (keep_window,),
+        )
+        deleted = cur.rowcount
+    conn.commit()
+
+    if deleted:
+        print(f"  ✅  {deleted:,} lignes legacy supprimées (fenêtres ≠ {keep_window})")
+    else:
+        print("  ✅  Aucune fenêtre legacy à supprimer")
+    return deleted
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 
@@ -485,7 +503,7 @@ def main():
         description="Refresh top_promotions_cache (all-time uniquement)."
     )
     parser.add_argument("--window-hours", type=int, default=0,
-                        help="Fenêtre horaire unique. 0=all-time (mode recommandé et unique en prod).")
+                        help="Compatibilité CLI: toute valeur est forcée à 0 (all-time).")
     parser.add_argument("--top-n", type=int, default=300)
     parser.add_argument("--skip-audit", action="store_true",
                         help="Sauter l'audit pré-refresh (plus rapide)")
@@ -497,8 +515,11 @@ def main():
                         help="Faire uniquement le check image sur le cache existant (sans refresh SQL)")
     args = parser.parse_args()
 
-    # Fenêtre à traiter : all-time uniquement par défaut.
-    windows = [args.window_hours] if args.window_hours is not None else WINDOWS_TO_REFRESH
+    if args.window_hours != 0:
+        print(f"⚠️  --window-hours={args.window_hours} ignoré : top_promotions_cache est all-time uniquement.")
+
+    # Fenêtre à traiter : all-time uniquement.
+    windows = WINDOWS_TO_REFRESH
 
     # Quand on vérifie les images, générer plus de candidats SQL
     candidate_top_n = args.top_n if args.skip_image_check else args.top_n * CANDIDATE_FACTOR
@@ -558,6 +579,9 @@ def main():
                     else:
                         _rerank(conn, window, args.top_n)
                     _post_audit(conn, window)
+
+            if 0 in windows:
+                _purge_non_all_time_windows(conn, 0)
 
     except Exception as e:
         conn.rollback()

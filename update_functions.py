@@ -38,7 +38,7 @@ def update_functions():
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS top_promotions_cache (
-          window_hours INT NOT NULL DEFAULT 24,
+          window_hours INT NOT NULL DEFAULT 0,
           scope_type VARCHAR NOT NULL,
           city VARCHAR NOT NULL,
           chain_id VARCHAR NOT NULL DEFAULT '',
@@ -65,6 +65,17 @@ def update_functions():
         );
         """)
         print("✅ ensure top_promotions_cache table")
+
+        cur.execute("""
+        ALTER TABLE top_promotions_cache
+          ALTER COLUMN window_hours SET DEFAULT 0;
+        ALTER TABLE top_promotions_cache
+          DROP CONSTRAINT IF EXISTS top_promotions_cache_window_all_time_chk;
+        ALTER TABLE top_promotions_cache
+          ADD CONSTRAINT top_promotions_cache_window_all_time_chk
+          CHECK (window_hours = 0) NOT VALID;
+        """)
+        print("✅ enforce top_promotions_cache all-time window")
 
         cur.execute("""
         ALTER TABLE product_prices
@@ -567,13 +578,13 @@ def update_functions():
 
         cur.execute("""
         CREATE OR REPLACE FUNCTION refresh_top_promotions_cache(
-          p_window_hours INT DEFAULT 24,
-          p_top_n INT DEFAULT 200
+          p_window_hours INT DEFAULT 0,
+          p_top_n INT DEFAULT 300
         )
         RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
         DECLARE
-          v_window_hours INT := GREATEST(COALESCE(p_window_hours, 24), 0);
-          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 200), 1), 5000);
+          v_window_hours INT := 0;
+          v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 300), 1), 5000);
           affected_rows INTEGER := 0;
         BEGIN
           -- Preserve has_image state before wiping the cache
@@ -620,7 +631,15 @@ def update_functions():
                     ELSE 0
                   END
                 ) * 0.40
-                + (LEAST(GREATEST(pp.price - LEAST(pp.price, psi.promo_price), 0), 80) * 0.60),
+                + (LEAST(GREATEST(pp.price - LEAST(pp.price, psi.promo_price), 0), 80) * 0.60)
+                - (
+                  CASE
+                    WHEN s.chain_id = '7290172900007'
+                      OR COALESCE(s.chain_name, '') = 'סופר פארם ישראל'
+                    THEN 1000
+                    ELSE 0
+                  END
+                ),
                 2
               ) AS smart_score,
               psi.promotion_end_date,
@@ -841,7 +860,7 @@ def update_functions():
           p_city TEXT,
           p_chain_id TEXT DEFAULT NULL,
           p_store_id TEXT DEFAULT NULL,
-          p_window_hours INT DEFAULT 24,
+          p_window_hours INT DEFAULT 0,
           p_limit INT DEFAULT 50,
           p_offset INT DEFAULT 0,
           p_order_by TEXT DEFAULT 'score',
@@ -879,33 +898,12 @@ def update_functions():
         DECLARE
           v_chain_id TEXT := COALESCE(p_chain_id, '');
           v_store_id TEXT := COALESCE(p_store_id, '');
-          v_window_hours INT;
+          v_window_hours INT := 0;
           v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 200);
           v_offset INT := GREATEST(COALESCE(p_offset, 0), 0);
         BEGIN
-          -- Cache uniquement en scope 'store'. On agrège à la volée par item_code.
-          -- p_window_hours = 0 = "all time" : chercher window_hours = 0 dans le cache.
-          IF COALESCE(p_window_hours, 24) = 0 THEN
-            SELECT 0 INTO v_window_hours
-            FROM top_promotions_cache c2
-            WHERE c2.window_hours = 0 AND c2.scope_type = 'store'
-            LIMIT 1;
-            IF v_window_hours IS NULL THEN
-              SELECT MAX(c2.window_hours) INTO v_window_hours
-              FROM top_promotions_cache c2 WHERE c2.scope_type = 'store';
-            END IF;
-          ELSE
-            -- Snap à la fenêtre disponible la plus proche (<= demandée)
-            SELECT MAX(c2.window_hours) INTO v_window_hours
-            FROM top_promotions_cache c2
-            WHERE c2.window_hours <= COALESCE(p_window_hours, 24)
-              AND c2.scope_type = 'store';
-            IF v_window_hours IS NULL THEN
-              SELECT MIN(c2.window_hours) INTO v_window_hours
-              FROM top_promotions_cache c2 WHERE c2.scope_type = 'store';
-            END IF;
-          END IF;
-          IF v_window_hours IS NULL THEN v_window_hours := 24; END IF;
+          -- top_promotions_cache is all-time only: ignore legacy requested windows.
+          v_window_hours := 0;
 
           RETURN QUERY
           WITH candidates AS (

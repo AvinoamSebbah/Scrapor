@@ -72,7 +72,7 @@ _PRODUCT_SEARCH_STATS_CHUNK = 20000
 _PRODUCT_SEARCH_STATS_FULL_REBUILD_THRESHOLD = int(
     os.getenv("PRODUCT_SEARCH_STATS_FULL_REBUILD_THRESHOLD", "50000")
 )
-_TOP_PROMOS_CACHE_DEFAULT_WINDOW_HOURS = int(os.getenv("TOP_PROMOS_CACHE_WINDOW_HOURS", "24"))
+_TOP_PROMOS_CACHE_DEFAULT_WINDOW_HOURS = int(os.getenv("TOP_PROMOS_CACHE_WINDOW_HOURS", "0"))
 _TOP_PROMOS_CACHE_DEFAULT_TOP_N = int(os.getenv("TOP_PROMOS_CACHE_TOP_N", "200"))
 
 
@@ -645,7 +645,12 @@ class PostgresUploader(ShortTermDatabaseUploader):
         except ValueError:
             top_n = _TOP_PROMOS_CACHE_DEFAULT_TOP_N
 
-        window_hours = max(window_hours, 1)
+        if window_hours != 0:
+            Logger.info(
+                "TOP_PROMOS_CACHE_WINDOW_HOURS=%d ignored; top_promotions_cache is all-time only",
+                window_hours,
+            )
+        window_hours = 0
         top_n = max(top_n, 1)
 
         try:

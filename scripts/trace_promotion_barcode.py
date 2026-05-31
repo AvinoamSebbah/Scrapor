@@ -552,7 +552,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--city", default=None, help="Optional city filter (prefix match, e.g. ירושלים)")
     parser.add_argument("--chain-id", default=None, help="Optional chain_id filter")
     parser.add_argument("--store-id", default=None, help="Optional store_id filter")
-    parser.add_argument("--window-hours", type=int, default=24, help="Window hours for get_top_city_promotions")
+    parser.add_argument("--window-hours", type=int, default=0, help="Compatibility option; top promos are all-time only")
     parser.add_argument("--row-limit", type=int, default=120, help="Max rows per diagnostic section")
     parser.add_argument(
         "--output",
@@ -581,7 +581,7 @@ def main() -> int:
     chain_id = normalize_optional(args.chain_id)
     store_id = normalize_optional(args.store_id)
     row_limit = max(int(args.row_limit), 1)
-    window_hours = max(int(args.window_hours), 1)
+    window_hours = 0
 
     try:
         db_url = resolve_db_url()

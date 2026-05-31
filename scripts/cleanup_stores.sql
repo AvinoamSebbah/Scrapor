@@ -122,6 +122,62 @@ UPDATE stores
 SET city = REPLACE(city, '-', ' ')
 WHERE city LIKE '%-%';
 
+-- =============================================================================
+-- PARTIE 3B : OVERRIDES MANUELS DE VILLE PAR MAGASIN
+-- =============================================================================
+-- Certains magasins Carrefour ont une adresse de rue contenant "ירושלים"
+-- alors que la vraie ville est ailleurs. Ces règles doivent passer après
+-- l'extraction automatique pour survivre aux prochains imports.
+WITH manual_city_overrides(chain_id, store_id, city) AS (
+    VALUES
+      ('7290055700007', '3740', 'אשקלון'),
+      ('7290055700007', '2740', 'רחובות'),
+      ('7290055700007', '2190', 'רחובות'),
+      ('7290055700007', '620',  'נתניה')
+)
+UPDATE stores s
+SET city = o.city,
+    updated_at = CURRENT_TIMESTAMP
+FROM manual_city_overrides o
+WHERE s.chain_id = o.chain_id
+  AND s.store_id = o.store_id
+  AND COALESCE(s.city, '') <> o.city;
+
+DO $$
+BEGIN
+  IF to_regclass('public.top_promotions_cache') IS NOT NULL THEN
+    WITH manual_city_overrides(chain_id, store_id, city) AS (
+        VALUES
+          ('7290055700007', '3740', 'אשקלון'),
+          ('7290055700007', '2740', 'רחובות'),
+          ('7290055700007', '2190', 'רחובות'),
+          ('7290055700007', '620',  'נתניה')
+    )
+    UPDATE top_promotions_cache tpc
+    SET city = o.city
+    FROM manual_city_overrides o
+    WHERE tpc.chain_id = o.chain_id
+      AND tpc.store_id = o.store_id
+      AND COALESCE(tpc.city, '') <> o.city;
+  END IF;
+
+  IF to_regclass('public.store_promotions_cache') IS NOT NULL THEN
+    WITH manual_city_overrides(chain_id, store_id, city) AS (
+        VALUES
+          ('7290055700007', '3740', 'אשקלון'),
+          ('7290055700007', '2740', 'רחובות'),
+          ('7290055700007', '2190', 'רחובות'),
+          ('7290055700007', '620',  'נתניה')
+    )
+    UPDATE store_promotions_cache spc
+    SET city = o.city
+    FROM manual_city_overrides o
+    WHERE spc.chain_id = o.chain_id
+      AND spc.store_id = o.store_id
+      AND COALESCE(spc.city, '') <> o.city;
+  END IF;
+END $$;
+
 
 UPDATE stores
 SET chain_name = CASE 

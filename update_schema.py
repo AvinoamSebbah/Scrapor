@@ -216,7 +216,7 @@ def update_schema():
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS top_promotions_cache (
-          window_hours INT NOT NULL DEFAULT 24,
+          window_hours INT NOT NULL DEFAULT 0,
           scope_type VARCHAR NOT NULL,
           city VARCHAR NOT NULL,
           chain_id VARCHAR NOT NULL DEFAULT '',
@@ -241,6 +241,16 @@ def update_schema():
           refreshed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (window_hours, scope_type, city, chain_id, store_id, rank_position)
         );
+        """)
+
+        cur.execute("""
+        ALTER TABLE top_promotions_cache
+          ALTER COLUMN window_hours SET DEFAULT 0;
+        ALTER TABLE top_promotions_cache
+          DROP CONSTRAINT IF EXISTS top_promotions_cache_window_all_time_chk;
+        ALTER TABLE top_promotions_cache
+          ADD CONSTRAINT top_promotions_cache_window_all_time_chk
+          CHECK (window_hours = 0) NOT VALID;
         """)
 
         cur.execute("""
@@ -732,11 +742,7 @@ def update_schema():
         )
         RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
         DECLARE
-          v_window_hours INT := CASE
-            WHEN p_window_hours IS NULL THEN 0
-            WHEN p_window_hours <= 0 THEN 0
-            ELSE p_window_hours
-          END;
+          v_window_hours INT := 0;
           v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 300), 1), 2000);
           v_store_standard_quota INT := GREATEST(1, CAST(ROUND(v_top_n * 2.0 / 3.0) AS INT));
           v_store_coupon_quota INT := GREATEST(0, v_top_n - GREATEST(1, CAST(ROUND(v_top_n * 2.0 / 3.0) AS INT)));
@@ -923,7 +929,9 @@ def update_schema():
                  + (LEAST(GREATEST(pp.price - LEAST(pp.price, lsp.promo_price), 0), 80) * 0.60)
                  - (
                    CASE
-                     WHEN LOWER(COALESCE(lsp.chain_name, '')) = 'be'
+                     WHEN lsp.chain_id = '7290172900007'
+                       OR COALESCE(lsp.chain_name, '') = 'סופר פארם ישראל'
+                       OR LOWER(COALESCE(lsp.chain_name, '')) = 'be'
                        OR COALESCE(lsp.chain_name, '') ILIKE '%יוחננוף%'
                        OR COALESCE(lsp.chain_name, '') ILIKE '%יוחנננוף%'
                        OR COALESCE(lsp.chain_name, '') = 'שופרסל שלי'
@@ -1232,11 +1240,7 @@ def update_schema():
           v_scope TEXT;
           v_chain_id TEXT := COALESCE(p_chain_id, '');
           v_store_id TEXT := COALESCE(p_store_id, '');
-          v_window_hours INT := CASE
-            WHEN p_window_hours IS NULL THEN 0
-            WHEN p_window_hours <= 0 THEN 0
-            ELSE p_window_hours
-          END;
+          v_window_hours INT := 0;
           v_limit INT := LEAST(GREATEST(COALESCE(p_limit, 50), 1), 50);
           v_offset INT := GREATEST(COALESCE(p_offset, 0), 0);
         BEGIN

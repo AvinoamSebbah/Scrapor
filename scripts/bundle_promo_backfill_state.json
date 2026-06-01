@@ -1,0 +1,123 @@
+{
+  "created_at": "2026-06-01T21:59:55",
+  "chains": {
+    "7291056200008": {
+      "chain_name": "רמי לוי בשכונה",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 0.4,
+      "updated_at": "2026-06-01T22:02:29"
+    },
+    "72906": {
+      "chain_name": "72906",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 1.9,
+      "updated_at": "2026-06-01T22:02:30"
+    },
+    "7290058289400": {
+      "chain_name": "קי טי יבוא ושווק בע\"מ",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 1.5,
+      "updated_at": "2026-06-01T22:02:32"
+    },
+    "7290103152017": {
+      "updated_at": "2026-06-01T22:01:38",
+      "inserted": 0,
+      "note": "Skipped because Oshar Ad bundle backfill was already applied manually before this resumable run.",
+      "chain_name": "אושר עד",
+      "status": "done"
+    },
+    "7290058288090": {
+      "chain_name": "7290058288090",
+      "status": "failed",
+      "error": "canceling statement due to statement timeout\n",
+      "duration_sec": 480.6,
+      "updated_at": "2026-06-01T22:10:33"
+    },
+    "72904": {
+      "chain_name": "72904",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 47.8,
+      "updated_at": "2026-06-01T22:11:20"
+    },
+    "7290700100008": {
+      "chain_name": "7290700100008",
+      "status": "failed",
+      "error": "canceling statement due to statement timeout\n",
+      "duration_sec": 480.7,
+      "updated_at": "2026-06-01T22:19:21"
+    },
+    "7291059100008": {
+      "chain_name": "פוליצר",
+      "status": "dry_run",
+      "stats": {
+        "candidate_rows": 16455,
+        "missing_rows": 16455,
+        "promos": 580,
+        "products": 2716,
+        "stores": 8
+      },
+      "duration_sec": 50.0,
+      "updated_at": "2026-06-01T22:24:28"
+    },
+    "7290058177776": {
+      "chain_name": "סופר יודה",
+      "status": "failed",
+      "error": "invalid input syntax for type numeric: \"NO_BODY\"\n",
+      "duration_sec": 1.7,
+      "updated_at": "2026-06-01T22:19:25"
+    },
+    "0": {
+      "chain_name": "0",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 44.1,
+      "updated_at": "2026-06-01T22:20:09"
+    },
+    "7290058266241": {
+      "chain_name": "סיטי צפריר בע\"מ",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 2.2,
+      "updated_at": "2026-06-01T22:20:11"
+    },
+    "7290875100001": {
+      "chain_name": "סופר ברקת קמעונאות בע\"מ",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 2.1,
+      "updated_at": "2026-06-01T22:20:13"
+    },
+    "7290526500006": {
+      "chain_name": "Dabach",
+      "status": "failed",
+      "error": "canceling statement due to user request\n",
+      "duration_sec": 10.1,
+      "updated_at": "2026-06-01T22:20:23"
+    },
+    "7290058159628": {
+      "chain_name": "ג.מ. מעיין אלפיים (07) בע\"מ",
+      "status": "done",
+      "inserted": 0,
+      "rollback_path": null,
+      "duration_sec": 1.9,
+      "updated_at": "2026-06-01T22:20:25"
+    },
+    "7290058108879": {
+      "chain_name": "7290058108879",
+      "status": "running",
+      "started_at": "2026-06-01T22:20:25"
+    }
+  },
+  "updated_at": "2026-06-01T22:24:28"
+}

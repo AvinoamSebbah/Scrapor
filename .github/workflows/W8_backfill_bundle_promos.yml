@@ -1,0 +1,122 @@
+name: "W8 · Backfill Bundle Promotions"
+
+# Manual workflow to backfill "X for Y" bundle promotions into promotion_store_items.
+# Progress is stored in the DB table bundle_promo_backfill_chain_state, so reruns skip
+# chains already marked done. No database credentials are stored in code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain_id:
+        description: "Optional single chain_id to process"
+        required: false
+        default: ""
+      limit:
+        description: "Optional max number of chains for this run; 0 means all"
+        required: false
+        default: "0"
+      dry_run:
+        description: "Estimate only, no DB writes"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      retry_failed:
+        description: "Retry chains already marked failed in local state"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      skip_oshar_ad:
+        description: "Skip Oshar Ad because it was already backfilled manually"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      statement_timeout_seconds:
+        description: "Per-chain SQL timeout; 0 means no timeout"
+        required: false
+        default: "0"
+
+concurrency:
+  group: backfill-bundle-promos
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: "Backfill bundle promotions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Open PostgreSQL SSH tunnel
+        uses: ./.github/actions/open-postgres-tunnel
+        with:
+          ssh-host: ${{ secrets.DO_HOST }}
+          ssh-user: ${{ secrets.DO_USERNAME }}
+          ssh-port: ${{ secrets.DO_PORT }}
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: Backfill chain todo list
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          DATABASE_URL: ${{ secrets.POSTGRESQL_URL }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          set -euo pipefail
+
+          ARGS=(
+            "--statement-timeout-seconds" "${{ inputs.statement_timeout_seconds }}"
+          )
+
+          if [ -n "${{ inputs.chain_id }}" ]; then
+            ARGS+=("--chain-id" "${{ inputs.chain_id }}")
+          fi
+
+          if [ "${{ inputs.limit }}" != "0" ]; then
+            ARGS+=("--limit" "${{ inputs.limit }}")
+          fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=("--dry-run")
+          fi
+
+          if [ "${{ inputs.retry_failed }}" = "true" ]; then
+            ARGS+=("--retry-failed")
+          fi
+
+          if [ "${{ inputs.skip_oshar_ad }}" = "true" ]; then
+            ARGS+=("--skip-chain-id" "7290103152017")
+          fi
+
+          python scripts/backfill_bundle_promos_by_chain.py "${ARGS[@]}"
+
+      - name: Upload backfill state and rollback SQL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-promo-backfill-${{ github.run_id }}
+          path: |
+            scripts/bundle_promo_backfill_state.json
+            scripts/bundle_promo_backfill_rollbacks/*.sql
+          if-no-files-found: ignore

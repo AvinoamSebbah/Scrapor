@@ -157,7 +157,8 @@ def update_functions():
               p.promotion_end_date,
               p.available_in_store_ids,
               item.item_code,
-              item.promo_price_num
+              item.promo_price_num,
+              item.item_min_qty_num
             FROM promotions p
             JOIN LATERAL (
               SELECT
@@ -211,7 +212,8 @@ def update_functions():
                         ELSE metrics.promotion_discounted_price_num
                       END
                     )
-                END AS promo_price_num
+                END AS promo_price_num,
+                metrics.item_min_qty_num AS item_min_qty_num
               FROM (
                 SELECT jsonb_path_query(COALESCE(p.items, '[]'::jsonb), '$.** ? (@.itemcode != null)') AS obj
                 UNION ALL
@@ -308,7 +310,15 @@ def update_functions():
             pi.promotion_id,
             pr.id AS product_id,
             ppx.store_id,
-            MIN(pi.promo_price_num) AS promo_price,
+            MIN(
+              CASE
+                WHEN pi.item_min_qty_num IS NOT NULL
+                  AND pi.item_min_qty_num > 1
+                  AND pi.promo_price_num >= ppx.price
+                THEN pi.promo_price_num / pi.item_min_qty_num
+                ELSE pi.promo_price_num
+              END
+            ) AS promo_price,
             pi.promotion_end_date,
             NOW()
           FROM promo_items pi
@@ -317,7 +327,24 @@ def update_functions():
           JOIN product_prices ppx ON ppx.product_id = pr.id AND ppx.store_id = sid.store_id_text::INT
           WHERE ppx.price IS NOT NULL
             AND ppx.price > 0
-            AND pi.promo_price_num < ppx.price
+            AND (
+              CASE
+                WHEN pi.item_min_qty_num IS NOT NULL
+                  AND pi.item_min_qty_num > 1
+                  AND pi.promo_price_num >= ppx.price
+                THEN pi.promo_price_num / pi.item_min_qty_num
+                ELSE pi.promo_price_num
+              END
+            ) < ppx.price
+            AND (
+              CASE
+                WHEN pi.item_min_qty_num IS NOT NULL
+                  AND pi.item_min_qty_num > 1
+                  AND pi.promo_price_num >= ppx.price
+                THEN pi.promo_price_num / pi.item_min_qty_num
+                ELSE pi.promo_price_num
+              END
+            ) >= (ppx.price * 0.05)
           GROUP BY pi.chain_id, pi.promotion_id, pr.id, ppx.store_id, pi.promotion_end_date;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;

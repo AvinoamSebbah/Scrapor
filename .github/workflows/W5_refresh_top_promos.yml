@@ -6,7 +6,7 @@ name: "W5 · Nightly Refresh Top Promotions"
 
 on:
   schedule:
-    - cron: '0 4 * * *'   # 4h00 UTC chaque jour
+    - cron: '0 0 * * *'   # 4h00 UTC chaque jour
   workflow_dispatch:
     inputs:
       top_n:

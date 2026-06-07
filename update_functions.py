@@ -666,14 +666,7 @@ def update_functions():
           v_top_n INT := LEAST(GREATEST(COALESCE(p_top_n, 300), 1), 5000);
           affected_rows INTEGER := 0;
         BEGIN
-          -- Preserve has_image state before wiping the cache
-          CREATE TEMP TABLE IF NOT EXISTS _img_state_backup (item_code TEXT, has_image BOOLEAN);
-          DELETE FROM _img_state_backup;
-          INSERT INTO _img_state_backup (item_code, has_image)
-          SELECT item_code, bool_or(has_image)
-          FROM top_promotions_cache
-          WHERE window_hours = v_window_hours AND has_image IS NOT NULL
-          GROUP BY item_code;
+          PERFORM pg_advisory_xact_lock(55555);
 
           DELETE FROM top_promotions_cache WHERE window_hours = v_window_hours;
 
@@ -689,6 +682,7 @@ def update_functions():
               p.item_code::TEXT AS item_code,
               p.item_name::TEXT AS item_name,
               p.manufacturer_name::TEXT AS manufacturer_name,
+              p.has_image,
               pp.unit_of_measure::TEXT AS unit_of_measure,
               pp.unit_qty::TEXT AS unit_qty,
               COALESCE(pp.b_is_weighted, FALSE) AS b_is_weighted,
@@ -769,6 +763,7 @@ def update_functions():
               AND psi.promo_price >= (pp.price * 0.05)
               AND (psi.promotion_end_date IS NULL OR psi.promotion_end_date >= CURRENT_DATE)
               AND (v_window_hours <= 0 OR psi.updated_at >= NOW() - make_interval(hours => v_window_hours))
+              AND p.has_image IS TRUE
               AND p.item_code IS NOT NULL
               AND p.item_code ~ '^[0-9]{8,14}$'
               AND COALESCE(BTRIM(p.item_name), '') <> ''
@@ -820,6 +815,7 @@ def update_functions():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.has_image,
               d.unit_of_measure,
               d.unit_qty,
               d.b_is_weighted,
@@ -867,7 +863,8 @@ def update_functions():
             promo_kind,
             promo_label,
             is_conditional_promo,
-            refreshed_at
+            refreshed_at,
+            has_image
           )
           SELECT
             v_window_hours,
@@ -909,20 +906,13 @@ def update_functions():
               END
             END AS promo_label,
             (COALESCE(q.promo_kind_computed, 'regular') <> 'regular') AS is_conditional_promo,
-            NOW()
+            NOW(),
+            q.has_image
           FROM (
             SELECT * FROM store_ranked WHERE rank_position <= v_top_n
           ) q;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;
-
-          -- Restore has_image from backup (preserves image-check state across refreshes)
-          UPDATE top_promotions_cache tpc
-          SET has_image = s.has_image
-          FROM _img_state_backup s
-          WHERE tpc.item_code = s.item_code
-            AND tpc.window_hours = v_window_hours
-            AND s.has_image IS NOT NULL;
 
           RETURN affected_rows;
         END;

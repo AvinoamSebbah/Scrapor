@@ -827,10 +827,7 @@ def update_schema():
           v_store_coupon_quota INT := GREATEST(0, v_top_n - GREATEST(1, CAST(ROUND(v_top_n * 2.0 / 3.0) AS INT)));
           affected_rows INTEGER := 0;
         BEGIN
-          CREATE TEMP TABLE _img_state_backup ON COMMIT DROP AS
-          SELECT item_code, BOOL_OR(has_image IS TRUE) AS has_image
-          FROM top_promotions_cache
-          GROUP BY item_code;
+          PERFORM pg_advisory_xact_lock(55555);
 
           DELETE FROM top_promotions_cache WHERE window_hours = v_window_hours;
 
@@ -966,7 +963,7 @@ def update_schema():
           limited_store_promos AS (
             SELECT *
             FROM ranked_store_items
-            WHERE store_rank <= GREATEST(v_top_n * 4, 4000)
+            WHERE store_rank <= GREATEST(v_top_n, 1000)
           ),
           scored_raw AS (
             SELECT
@@ -978,6 +975,7 @@ def update_schema():
               p.item_code::TEXT AS item_code,
               p.item_name::TEXT AS item_name,
               p.manufacturer_name::TEXT AS manufacturer_name,
+              p.has_image,
               lsp.promotion_id,
               lsp.promotion_description,
               lsp.min_qty,
@@ -1026,12 +1024,11 @@ def update_schema():
             FROM limited_store_promos lsp
             JOIN product_prices pp ON pp.product_id = lsp.product_id AND pp.store_id = lsp.store_db_id
             JOIN products p ON p.id = lsp.product_id
-            LEFT JOIN _img_state_backup img ON img.item_code = p.item_code::TEXT
             WHERE pp.price IS NOT NULL
               AND pp.price > 0
               AND lsp.promo_price < pp.price
               AND lsp.promo_price >= (pp.price * 0.10)
-              AND COALESCE(img.has_image, TRUE) IS TRUE
+              AND p.has_image IS TRUE
               AND p.item_code IS NOT NULL
               AND p.item_code ~ '^[0-9]{8,14}$'
               AND COALESCE(BTRIM(p.item_name), '') <> ''
@@ -1090,6 +1087,7 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.has_image,
               d.promotion_id,
               d.promotion_description,
               d.min_qty,
@@ -1125,6 +1123,7 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.has_image,
               d.promotion_id,
               d.promotion_description,
               d.min_qty,
@@ -1180,6 +1179,7 @@ def update_schema():
               d.item_code,
               d.item_name,
               d.manufacturer_name,
+              d.has_image,
               d.promotion_id,
               d.promotion_description,
               d.min_qty,
@@ -1236,7 +1236,8 @@ def update_schema():
             smart_score,
             promotion_end_date,
             updated_at,
-            refreshed_at
+            refreshed_at,
+            has_image
           )
           SELECT
             v_window_hours,
@@ -1267,7 +1268,8 @@ def update_schema():
             q.smart_score,
             q.promotion_end_date,
             q.updated_at,
-            NOW()
+            NOW(),
+            q.has_image
           FROM (
             SELECT * FROM city_ranked WHERE rank_position <= v_top_n
             UNION ALL
@@ -1277,18 +1279,6 @@ def update_schema():
           ) q;
 
           GET DIAGNOSTICS affected_rows = ROW_COUNT;
-
-          UPDATE top_promotions_cache tpc
-          SET has_image = b.has_image
-          FROM _img_state_backup b
-          WHERE tpc.window_hours = v_window_hours
-            AND tpc.item_code = b.item_code
-            AND b.has_image IS NOT NULL;
-
-          UPDATE top_promotions_cache
-          SET has_image = FALSE
-          WHERE window_hours = v_window_hours
-            AND has_image IS NULL;
 
           RETURN affected_rows;
         END;

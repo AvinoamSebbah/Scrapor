@@ -1,69 +1,36 @@
-# refresh_top_promos.py — Flags & variables d'environnement
+# refresh_top_promos.py
 
 ## Variables d'environnement
 
 | Variable | Valeur par défaut | Description |
 |---|---|---|
-| `DATABASE_URL` | — | **Obligatoire.** URL PostgreSQL |
-| `BACKEND_API_URL` | `https://api.agali.live` | URL de l'API backend pour la vérification image. Mettre `http://localhost:3000` en dev. |
+| `POSTGRESQL_URL` / `DATABASE_URL` / `SUPABASE_DATABASE_URL` | - | Obligatoire. URL PostgreSQL |
 
 ## Flags CLI
 
 | Flag | Description |
 |---|---|
-| `--window-hours N` | Fenêtre temporelle en heures (défaut : 168 = 7 jours) |
-| `--top-n N` | Nombre de promos finales souhaitées par scope/ville/chaîne (défaut : 200) |
-| `--skip-audit` | Saute l'audit pré-refresh (plus rapide, recommandé en prod nocturne) |
-| `--skip-image-check` | Saute totalement la vérification image (dev/debug rapide) |
-| `--include-no-image` | **Voir ci-dessous** |
+| `--window-hours N` | Compatibilité CLI : toute valeur est forcée à `0` car le cache est all-time |
+| `--top-n N` | Nombre de promotions finales souhaitées par groupe de cache |
+| `--skip-audit` | Saute l'audit pré-refresh |
+| `--skip-image-check` | Compatibilité : ignoré |
+| `--include-no-image` | Compatibilité : ignoré |
+| `--images-only` | Compatibilité : ignoré |
 
-## Comportement par défaut (production)
-
-```
-python refresh_top_promos.py --window-hours 168 --top-n 200 --skip-audit
-```
-
-1. SQL génère `top_n × CANDIDATE_FACTOR` (= 800) candidats
-2. Appels batch à `/api/products/images/batch` (50 items/lot) → le backend vérifie dans cet ordre :
-   - DigitalOcean Spaces (cache existant)
-   - Pricez via le bridge Cloudinary
-   - upload de l'image bridgée vers DigitalOcean Spaces
-   - si Pricez/bridge échoue, le produit est considéré sans image
-3. `has_image` mis à jour dans la DB
-4. **Lignes sans image supprimées**
-5. Re-rank des lignes restantes → top 200 avec images
-
-Le lendemain matin, la page promos affiche 100 % de produits avec images.
-
-## Flag `--include-no-image`
-
-```
-python refresh_top_promos.py --window-hours 24 --top-n 200 --include-no-image
-```
-
-Active ce flag si tu veux **garder les promos sans image** dans le cache au lieu de les supprimer.
-Elles seront classées **après** les promos avec image (`has_image DESC NULLS LAST, smart_score DESC`).
-
-Cas d'usage :
-- Tester que la page gère bien les placeholders
-- Garder une grande remise même si l'image est introuvable
-
-## Constantes modifiables dans le script
-
-Situées en haut de `refresh_top_promos.py` :
-
-| Constante | Valeur | Description |
-|---|---|---|
-| `CANDIDATE_FACTOR` | `4` | Multiplicateur de sur-génération SQL (ex: top_n=200 → 800 candidats SQL) |
-| `IMAGE_BATCH_SIZE` | `50` | Taille des lots envoyés à l'API backend (limite backend = 50) |
-| `IMAGE_REQUEST_TIMEOUT` | `60` | Timeout HTTP par lot (secondes) |
-
-## Exemple de run nocturne complet (les 2 fenêtres)
+## Comportement actuel
 
 ```bash
-export DATABASE_URL="postgresql://..."
-export BACKEND_API_URL="https://api.agali.live"
-
-python refresh_top_promos.py --window-hours 24  --top-n 200 --skip-audit
-python refresh_top_promos.py --window-hours 168 --top-n 200 --skip-audit
+python refresh_top_promos.py --top-n 300 --skip-audit
 ```
+
+Le script appelle `refresh_top_promotions_cache(0, top_n)`.
+La fonction SQL utilise `products.has_image` comme source de vérité et filtre directement avec `p.has_image IS TRUE`.
+
+Il n'y a plus :
+
+- de fetch image via l'API backend
+- d'appel Pricez/OpenFoodFacts
+- de sur-génération `top_n x CANDIDATE_FACTOR`
+- d'update post-refresh de `top_promotions_cache.has_image`
+
+Le lock `55555` est pris dans le script manuel et aussi dans la fonction SQL, pour sérialiser les refreshs lancés depuis W3/W5 ou depuis un run manuel.

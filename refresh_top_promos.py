@@ -5,14 +5,11 @@ refresh_top_promos.py
 Peuple top_promotions_cache via refresh_top_promotions_cache().
 
 Par défaut le script :
-  1. Génère CANDIDATE_FACTOR × top_n candidats all-time en SQL
-  2. Vérifie les images via l'API backend (Spaces → Pricez via Cloudinary bridge → Spaces)
-  3. Supprime les lignes sans image du cache
-  4. Re-rank les lignes restantes et recoupe à top_n final
+  1. Génère le cache all-time via SQL avec top_n comme limite finale
+  2. Utilise products.has_image comme source de vérité côté fonction SQL
+  3. Re-rank les lignes restantes et recoupe à top_n final
 
 Comportements alternatifs (flags) :
-  --include-no-image   : garde les promos sans image mais les met en dernier (après celles avec image)
-  --skip-image-check   : saute totalement la vérification image (dev/debug rapide)
   --skip-audit         : saute l'audit pré-refresh
 
 Voir docs/image_refresh_flags.md pour plus de détails.
@@ -20,11 +17,9 @@ Voir docs/image_refresh_flags.md pour plus de détails.
 Usage:
     python refresh_top_promos.py
     python refresh_top_promos.py --top-n 300
-    python refresh_top_promos.py --include-no-image
-    python refresh_top_promos.py --skip-image-check --skip-audit
+    python refresh_top_promos.py --skip-audit
 
 Requiert POSTGRESQL_URL ou DATABASE_URL dans l'environnement.
-Requiert BACKEND_API_URL (défaut: https://api.agali.live) pour la vérification image.
 """
 
 import argparse
@@ -33,28 +28,11 @@ import sys
 import time
 
 import psycopg2
-import requests
 from psycopg2.extras import RealDictCursor
-
-# ─── Configuration image ────────────────────────────────────────────────────
-
-# URL de l'API backend utilisée pour vérifier/uploader les images.
-# Override via env var BACKEND_API_URL (ex: http://localhost:3000 en dev).
-BACKEND_API_URL = os.getenv("BACKEND_API_URL", "https://api.agali.live")
-
-# Facteur de sur-génération SQL : on demande CANDIDATE_FACTOR × top_n candidats
-# pour avoir assez de promos avec images après filtrage.
-CANDIDATE_FACTOR = 4
 
 # Fenêtre unique conservée pour le cache promos :
 # 0 = "all time" (toutes promos non-expirées, sans limite de date)
 WINDOWS_TO_REFRESH = [0]
-
-# Taille maximale des lots envoyés à l'API batch images (limite côté backend = 50).
-IMAGE_BATCH_SIZE = 50
-
-# Timeout en secondes pour les appels HTTP à l'API backend.
-IMAGE_REQUEST_TIMEOUT = 60
 
 
 # ─── Connexion ──────────────────────────────────────────────────────────────
@@ -227,139 +205,6 @@ def _post_audit(conn, window_hours: int):
     conn.commit()
 
 
-# ─── Vérification images via API backend ─────────────────────────────────────
-
-
-def _check_images(conn, window_hours: int, include_no_image: bool, top_n: int) -> tuple:
-    """
-    1. Récupère tous les item_codes distincts du cache pour window_hours
-    2. Envoie des lots de IMAGE_BATCH_SIZE à POST /api/products/images/batch
-    3. Met à jour has_image dans la DB
-    4. Supprime les lignes sans image (sauf si include_no_image=True)
-    5. Re-rank les lignes restantes (celles avec image en premier)
-    6. Coupe à top_n par scope/city/chain/store
-
-    Retourne des stats : { total, with_image, without_image, deleted }
-    """
-    _banner("Vérification images")
-
-    # 1) Récupère tous les item_codes du cache.
-    # On revalide aussi les anciens TRUE: sinon un faux positif historique
-    # peut survivre indéfiniment alors que l'URL image est morte aujourd'hui.
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT DISTINCT item_code
-            FROM top_promotions_cache
-            WHERE window_hours = %s
-            """,
-            (window_hours,),
-        )
-        rows = cur.fetchall()
-    item_codes = [r["item_code"] for r in rows]
-    total = len(item_codes)
-    print(f"  {total} item_codes distincts à revalider…")
-
-    if total == 0:
-        return conn, {"total": 0, "with_image": 0, "without_image": 0, "deleted": 0}
-
-    # 2) Batch calls à l'API backend
-    # autocommit=True évite que la connexion soit en état "idle in transaction"
-    # pendant les appels HTTP, ce qui déclenche idle_in_transaction_session_timeout
-    # côté PostgreSQL et coupe la connexion.
-    conn.commit()  # ferme la transaction ouverte par le SELECT ci-dessus
-    conn.autocommit = True
-    image_map: dict[str, bool] = {}
-    session = requests.Session()
-    session.verify = False  # bypass SSL cert issues on Windows (dev)
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    endpoint = f"{BACKEND_API_URL}/api/products/images/batch"
-
-    for i in range(0, total, IMAGE_BATCH_SIZE):
-        batch = item_codes[i : i + IMAGE_BATCH_SIZE]
-        batch_num = i // IMAGE_BATCH_SIZE + 1
-        total_batches = (total + IMAGE_BATCH_SIZE - 1) // IMAGE_BATCH_SIZE
-        print(f"  Lot {batch_num}/{total_batches} ({len(batch)} items)…", end=" ", flush=True)
-        t0 = time.time()
-        try:
-            resp = session.post(
-                endpoint,
-                json={"barcodes": batch, "bypassNegativeCache": True},
-                timeout=IMAGE_REQUEST_TIMEOUT,
-                verify=False,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            images = data.get("images", {})
-            for code in batch:
-                result = images.get(code, {})
-                image_map[code] = bool(result.get("imageUrl"))
-            print(f"OK ({time.time()-t0:.1f}s)")
-        except Exception as exc:
-            # Si le batch échoue on marque tout comme ayant une image (conservatif)
-            print(f"ERREUR ({exc}) — conservé comme has_image=NULL")
-            for code in batch:
-                image_map.setdefault(code, True)  # ne pas pénaliser si réseau KO
-
-        # Mise à jour DB — autocommit=True donc chaque execute est son propre commit
-        # Chaque valeur (TRUE / FALSE) est traitée séparément pour éviter les
-        # re-exécutions inutiles en cas de retry : si UPDATE TRUE a déjà committé,
-        # on ne le relance pas une 2ème fois.
-        batch_with = [c for c in batch if image_map.get(c) is True]
-        batch_without = [c for c in batch if image_map.get(c) is False]
-        for items, flag in ((batch_with, True), (batch_without, False)):
-            if not items:
-                continue
-            for _attempt in range(3):
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE top_promotions_cache SET has_image = %s"
-                            " WHERE window_hours = %s AND item_code = ANY(%s)",
-                            (flag, window_hours, items),
-                        )
-                    break  # succès
-                except psycopg2.errors.DeadlockDetected:
-                    if _attempt < 2:
-                        # Ferme proprement l'ancienne connexion avant d'en ouvrir une nouvelle
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
-                        time.sleep(1 + _attempt)  # backoff court avant retry
-                        conn = _connect(_db_url())
-                        conn.autocommit = True
-                    else:
-                        raise
-
-    with_image = sum(1 for v in image_map.values() if v)
-    without_image = sum(1 for v in image_map.values() if not v)
-    print(f"\n  Résultat : {with_image} avec image, {without_image} sans image")
-
-    # Repasser en mode transaction explicite pour la suite (delete + rerank)
-    conn.autocommit = False
-
-    deleted = 0
-    if not include_no_image:
-        # 4) Supprimer les lignes sans image
-        with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM top_promotions_cache WHERE window_hours = %s AND has_image = FALSE",
-                (window_hours,),
-            )
-            deleted = cur.rowcount
-        conn.commit()
-        print(f"  {deleted} lignes sans image supprimées")
-    else:
-        print(f"  Mode --include-no-image : promos sans image conservées (en dernier)")
-
-    # 5 & 6) Re-rank et recoupe à top_n par groupe
-    _rerank(conn, window_hours, top_n)
-
-    return conn, {"total": total, "with_image": with_image, "without_image": without_image, "deleted": deleted}
-
-
 def _rerank(conn, window_hours: int, top_n: int):
     """
     Re-numérote rank_position au sein de chaque groupe
@@ -508,21 +353,22 @@ def main():
     parser.add_argument("--skip-audit", action="store_true",
                         help="Sauter l'audit pré-refresh (plus rapide)")
     parser.add_argument("--skip-image-check", action="store_true",
-                        help="Sauter la vérification image (dev/debug rapide)")
+                        help="Compatibilité: ignoré, products.has_image est utilisé en SQL")
     parser.add_argument("--include-no-image", action="store_true",
-                        help="Garder les promos sans image (en dernier dans le classement)")
+                        help="Compatibilité: ignoré, le cache garde seulement products.has_image=TRUE")
     parser.add_argument("--images-only", action="store_true",
-                        help="Faire uniquement le check image sur le cache existant (sans refresh SQL)")
+                        help="Compatibilité: ignoré, plus de vérification image dans ce script")
     args = parser.parse_args()
 
     if args.window_hours != 0:
         print(f"⚠️  --window-hours={args.window_hours} ignoré : top_promotions_cache est all-time uniquement.")
+    if args.skip_image_check or args.include_no_image or args.images_only:
+        print("⚠️  Flags image ignorés : products.has_image est la source de vérité côté SQL.")
 
     # Fenêtre à traiter : all-time uniquement.
     windows = WINDOWS_TO_REFRESH
 
-    # Quand on vérifie les images, générer plus de candidats SQL
-    candidate_top_n = args.top_n if args.skip_image_check else args.top_n * CANDIDATE_FACTOR
+    candidate_top_n = args.top_n
 
     print(f"🔌  Connexion à la DB…")
     db_url = _db_url()
@@ -538,50 +384,28 @@ def main():
         cur.execute("SELECT pg_advisory_lock(55555)")
     print("🔒  Lock acquis.")
 
-    if not args.skip_image_check:
-        print(f"📡  Backend images : {BACKEND_API_URL}")
-
     try:
-        if args.images_only:
-            # Uniquement le check image + rerank sur les fenêtres demandées
-            for window in windows:
-                label = "all-time" if window == 0 else f"{window}h"
-                print(f"\n  ── Fenêtre {label} ──")
-                conn, stats = _check_images(conn, window, args.include_no_image, args.top_n)
-                print(
-                    f"  📸  Images : {stats['with_image']}/{stats['total']} avec image"
-                    + (f", {stats['deleted']} sans image supprimées" if stats['deleted'] else "")
-                )
-        else:
-            if not args.skip_image_check:
-                print(f"📦  Candidats SQL : {candidate_top_n} (={args.top_n} × {CANDIDATE_FACTOR})")
-            if not args.skip_audit:
-                _audit(conn, windows[0])
-                conn.commit()
+        print(f"📦  Top final SQL : {candidate_top_n}")
+        if not args.skip_audit:
+            _audit(conn, windows[0])
+            conn.commit()
 
-            for window in windows:
-                label = "all-time" if window == 0 else f"{window}h"
-                print(f"\n{'═'*55}")
-                print(f"  Fenêtre : {label}")
-                print(f"{'═'*55}")
+        for window in windows:
+            label = "all-time" if window == 0 else f"{window}h"
+            print(f"\n{'═'*55}")
+            print(f"  Fenêtre : {label}")
+            print(f"{'═'*55}")
 
-                affected = _refresh(conn, window, candidate_top_n)
+            affected = _refresh(conn, window, candidate_top_n)
 
-                if affected == 0:
-                    print(f"\n⚠️  Aucune ligne insérée pour {label}.")
-                else:
-                    if not args.skip_image_check:
-                        conn, stats = _check_images(conn, window, args.include_no_image, args.top_n)
-                        print(
-                            f"\n  📸  Images : {stats['with_image']}/{stats['total']} avec image"
-                            + (f", {stats['deleted']} sans image supprimées" if stats['deleted'] else "")
-                        )
-                    else:
-                        _rerank(conn, window, args.top_n)
-                    _post_audit(conn, window)
+            if affected == 0:
+                print(f"\n⚠️  Aucune ligne insérée pour {label}.")
+            else:
+                _rerank(conn, window, args.top_n)
+                _post_audit(conn, window)
 
-            if 0 in windows:
-                _purge_non_all_time_windows(conn, 0)
+        if 0 in windows:
+            _purge_non_all_time_windows(conn, 0)
 
     except Exception as e:
         conn.rollback()

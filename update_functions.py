@@ -150,7 +150,7 @@ def update_functions():
             DELETE FROM promotion_store_items WHERE chain_id = p_chain_id;
           END IF;
 
-          WITH promo_items AS (
+          WITH promo_items_raw AS (
             SELECT
               p.chain_id,
               p.promotion_id,
@@ -158,7 +158,8 @@ def update_functions():
               p.available_in_store_ids,
               item.item_code,
               item.promo_price_num,
-              item.item_min_qty_num
+              item.item_min_qty_num,
+              item.is_confirmed_gift_price
             FROM promotions p
             JOIN LATERAL (
               SELECT
@@ -166,6 +167,10 @@ def update_functions():
                 CASE
                   WHEN metrics.is_weighted THEN
                     COALESCE(
+                      CASE
+                        WHEN metrics.is_confirmed_gift_price THEN metrics.item_gift_price_num
+                        ELSE NULL
+                      END,
                       CASE
                         WHEN metrics.item_discounted_price_per_mida_num IS NOT NULL
                           AND metrics.item_discounted_price_per_mida_num > 0
@@ -198,6 +203,10 @@ def update_functions():
                   ELSE
                     COALESCE(
                       CASE
+                        WHEN metrics.is_confirmed_gift_price THEN metrics.item_gift_price_num
+                        ELSE NULL
+                      END,
+                      CASE
                         WHEN metrics.item_discounted_price_num IS NULL THEN NULL
                         WHEN metrics.item_discounted_price_num <= 0 THEN NULL
                         WHEN metrics.item_discounted_price_num < 1
@@ -213,7 +222,8 @@ def update_functions():
                       END
                     )
                 END AS promo_price_num,
-                metrics.item_min_qty_num AS item_min_qty_num
+                metrics.item_min_qty_num AS item_min_qty_num,
+                metrics.is_confirmed_gift_price AS is_confirmed_gift_price
               FROM (
                 SELECT jsonb_path_query(COALESCE(p.items, '[]'::jsonb), '$.** ? (@.itemcode != null)') AS obj
                 UNION ALL
@@ -221,10 +231,25 @@ def update_functions():
               ) AS q
               CROSS JOIN LATERAL (
                 SELECT
+                  parsed.item_gift_price_num,
                   parsed.item_discounted_price_num,
                   parsed.item_discounted_price_per_mida_num,
                   parsed.item_min_qty_num,
                   parsed.promotion_discounted_price_num,
+                  (
+                    parsed.is_gift_item
+                    AND parsed.item_gift_price_num IS NOT NULL
+                    AND parsed.item_gift_price_num > 0
+                    AND EXISTS (
+                      SELECT 1
+                      FROM regexp_matches(
+                        REPLACE(COALESCE(p.promotion_description, ''), ',', '.'),
+                        '([0-9]+(?:\.[0-9]+)?)',
+                        'g'
+                      ) AS m(match)
+                      WHERE (m.match)[1]::NUMERIC = parsed.item_gift_price_num
+                    )
+                  ) AS is_confirmed_gift_price,
                   (
                     LOWER(
                       COALESCE(
@@ -242,6 +267,24 @@ def update_functions():
                   ) AS is_weighted
                 FROM (
                   SELECT
+                    LOWER(
+                      COALESCE(
+                        NULLIF(BTRIM(q.obj->>'isgiftitem'), ''),
+                        NULLIF(BTRIM(q.obj->>'IsGiftItem'), ''),
+                        '0'
+                      )
+                    ) IN ('1', 'true', 't', 'yes', 'y') AS is_gift_item,
+                    CASE
+                      WHEN COALESCE(
+                        NULLIF(REPLACE(q.obj->>'giftitemprice', ',', '.'), ''),
+                        NULLIF(REPLACE(q.obj->>'GiftItemPrice', ',', '.'), '')
+                      ) ~ '^\s*[-]?[0-9]+(\.[0-9]+)?\s*$'
+                      THEN COALESCE(
+                        NULLIF(REPLACE(q.obj->>'giftitemprice', ',', '.'), ''),
+                        NULLIF(REPLACE(q.obj->>'GiftItemPrice', ',', '.'), '')
+                      )::NUMERIC
+                      ELSE NULL
+                    END AS item_gift_price_num,
                     CASE
                       WHEN COALESCE(
                         NULLIF(REPLACE(q.obj->>'discountedprice', ',', '.'), ''),
@@ -301,6 +344,14 @@ def update_functions():
               AND item.item_code IS NOT NULL
               AND item.promo_price_num IS NOT NULL
               AND item.promo_price_num > 0
+          ),
+          promo_items AS (
+            SELECT
+              *,
+              BOOL_OR(is_confirmed_gift_price) OVER (
+                PARTITION BY chain_id, promotion_id, item_code
+              ) AS has_confirmed_gift_price
+            FROM promo_items_raw
           )
           INSERT INTO promotion_store_items (
             chain_id, promotion_id, product_id, store_id, promo_price, promotion_end_date, updated_at
@@ -327,6 +378,7 @@ def update_functions():
           JOIN product_prices ppx ON ppx.product_id = pr.id AND ppx.store_id = sid.store_id_text::INT
           WHERE ppx.price IS NOT NULL
             AND ppx.price > 0
+            AND (NOT pi.has_confirmed_gift_price OR pi.is_confirmed_gift_price)
             AND (
               CASE
                 WHEN pi.item_min_qty_num IS NOT NULL

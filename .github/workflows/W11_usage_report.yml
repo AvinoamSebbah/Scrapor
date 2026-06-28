@@ -2,7 +2,11 @@ name: "W11 · Agali Usage Telegram Report"
 
 on:
   schedule:
-    - cron: "30 3 * * *"
+    # 18:00 Asia/Jerusalem.
+    # GitHub cron is UTC and Israel switches DST, so run both possible UTC
+    # slots and keep only the one that is actually 18:00 locally.
+    - cron: "0 15 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,7 +30,20 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Check Israel report hour
+        id: israel_time
+        if: github.event_name == 'schedule'
+        run: |
+          HOUR="$(TZ=Asia/Jerusalem date +%H)"
+          if [ "$HOUR" != "18" ]; then
+            echo "Skipping: current Israel hour is $HOUR, not 18."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+
       - name: Open PostgreSQL SSH tunnel
+        if: github.event_name != 'schedule' || steps.israel_time.outputs.should_run == 'true'
         continue-on-error: true
         uses: ./.github/actions/open-postgres-tunnel
         with:
@@ -36,6 +53,7 @@ jobs:
           ssh-private-key: ${{ secrets.DO_SSH_KEY }}
 
       - name: Send usage report
+        if: github.event_name != 'schedule' || steps.israel_time.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT3_TOKEN: ${{ secrets.TELEGRAM_BOT3_TOKEN }}
           TELEGRAM_BOT3_CHAT_ID: ${{ secrets.TELEGRAM_BOT3_CHAT_ID }}

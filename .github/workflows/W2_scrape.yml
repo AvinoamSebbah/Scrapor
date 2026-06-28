@@ -258,6 +258,9 @@ jobs:
     needs: [prepare-processed-files-cache, scrape, wait-for-w3s]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -283,6 +286,7 @@ jobs:
           TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
           TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           STATUS="success"
           if [ "${{ needs.prepare-processed-files-cache.result }}" != "success" ] || [ "${{ needs.scrape.result }}" != "success" ] || [ "${{ needs.wait-for-w3s.result }}" != "success" ]; then
@@ -294,6 +298,7 @@ jobs:
             --title "W2 full scrape cycle" \
             --workflow "W2_scrape.yml" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --enabled-stores "${{ inputs.enabled_scrapers }}" \
             --hours 6
 
       - name: Send Bot 2 failure alert

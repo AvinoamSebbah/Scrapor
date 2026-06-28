@@ -69,11 +69,15 @@ def posthog_metrics(hours: int) -> dict[str, Any]:
         SELECT
           count() AS events,
           count(DISTINCT person_id) AS active_users,
+          count(DISTINCT properties.$session_id) AS sessions,
           countIf(event = '$pageview') AS pageviews,
           countIf(event = 'agali_search') AS searches,
+          countIf(event = 'agali_search_fast') AS fast_searches,
           countIf(event = 'agali_product_detail') AS product_details,
           countIf(event = 'agali_top_promotions_view') AS promo_views,
-          countIf(event = 'agali_receipt_scan_success') AS receipt_scans
+          countIf(event = 'agali_receipt_scan_success') AS receipt_scans,
+          countIf(event = 'agali_signup_success') AS signups,
+          countIf(event = 'agali_observation_created') AS observations
         FROM events
         WHERE timestamp >= {since}
         """
@@ -87,6 +91,17 @@ def posthog_metrics(hours: int) -> dict[str, Any]:
           AND properties.$pathname IS NOT NULL
         GROUP BY path
         ORDER BY views DESC
+        LIMIT 8
+        """
+    )
+    metrics["top_events"] = posthog_query(
+        f"""
+        SELECT event, count() AS total
+        FROM events
+        WHERE timestamp >= {since}
+          AND event NOT IN ('$feature_flag_called')
+        GROUP BY event
+        ORDER BY total DESC
         LIMIT 8
         """
     )
@@ -154,38 +169,48 @@ def build_message(hours: int) -> str:
         posthog_error = str(exc)
     db = db_metrics(hours)
 
-    lines = [f"📊 <b>Agali Users</b> · last {hours}h"]
+    lines = [f"📊 <b>Agali Users</b> · dernières {hours}h"]
     if posthog_error:
-        lines.append(f"PostHog: unavailable ({escape(posthog_error[:300])})")
+        lines.append(f"❌ <b>PostHog</b>: unavailable ({escape(posthog_error[:300])})")
     else:
-        row = (ph.get("summary") or [[0, 0, 0, 0, 0, 0, 0]])[0]
-        lines.append(
-            "PostHog: "
-            f"events=<b>{escape(row[0])}</b>, active=<b>{escape(row[1])}</b>, "
-            f"pageviews=<b>{escape(row[2])}</b>, searches=<b>{escape(row[3])}</b>"
-        )
-        lines.append(
-            f"Products=<b>{escape(row[4])}</b>, promos=<b>{escape(row[5])}</b>, scans=<b>{escape(row[6])}</b>"
-        )
+        row = (ph.get("summary") or [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])[0]
+        lines.append("🧭 <b>PostHog</b>")
+        lines.append(f"👥 Utilisateurs actifs: <b>{escape(row[1])}</b>")
+        lines.append(f"🧑‍💻 Sessions: <b>{escape(row[2])}</b>")
+        lines.append(f"📄 Pages vues: <b>{escape(row[3])}</b>")
+        lines.append(f"⚡ Events total: <b>{escape(row[0])}</b>")
+        lines.append(f"🔎 Recherches: <b>{escape(row[4])}</b> | rapides: <b>{escape(row[5])}</b>")
+        lines.append(f"🛒 Fiches produit: <b>{escape(row[6])}</b>")
+        lines.append(f"🏷️ Top promos vues: <b>{escape(row[7])}</b>")
+        lines.append(f"🧾 Scans ticket: <b>{escape(row[8])}</b>")
+        lines.append(f"🆕 Signups captés: <b>{escape(row[9])}</b>")
+        lines.append(f"🔔 Alertes créées: <b>{escape(row[10])}</b>")
         top_pages = ph.get("top_pages") or []
         if top_pages:
-            lines.append("Top pages: " + ", ".join(f"{escape(p[0])} ({escape(p[1])})" for p in top_pages[:5]))
+            lines.append("🏆 <b>Top pages</b>")
+            for page, views in top_pages[:6]:
+                lines.append(f"• {escape(page)} — <b>{escape(views)}</b>")
+        top_events = ph.get("top_events") or []
+        if top_events:
+            lines.append("🔥 <b>Top events</b>")
+            for event, total in top_events[:6]:
+                lines.append(f"• {escape(event)} — <b>{escape(total)}</b>")
 
     if not db.get("available"):
-        lines.append(f"DB: unavailable ({escape(db.get('reason'))})")
+        lines.append(f"❌ <b>DB</b>: unavailable ({escape(db.get('reason'))})")
     else:
-        lines.append(
-            "DB: "
-            f"new users=<b>{escape(db.get('new_users'))}</b>, "
-            f"new alerts=<b>{escape(db.get('new_observations'))}</b>, "
-            f"active alerts=<b>{escape(db.get('active_observations'))}</b>"
-        )
-        lines.append(
-            f"lists=<b>{escape(db.get('new_shopping_lists'))}</b>, carts=<b>{escape(db.get('new_user_carts'))}</b>, shares=<b>{escape(db.get('new_share_links'))}</b>"
-        )
+        lines.append("🗄️ <b>PostgreSQL métier</b>")
+        lines.append(f"🆕 Nouveaux inscrits: <b>{escape(db.get('new_users'))}</b>")
+        lines.append(f"🔔 Nouvelles alertes: <b>{escape(db.get('new_observations'))}</b>")
+        lines.append(f"📌 Alertes actives: <b>{escape(db.get('active_observations'))}</b>")
+        lines.append(f"📝 Listes créées: <b>{escape(db.get('new_shopping_lists'))}</b>")
+        lines.append(f"🛒 Carts sauvés: <b>{escape(db.get('new_user_carts'))}</b>")
+        lines.append(f"🔗 Share links: <b>{escape(db.get('new_share_links'))}</b>")
         usage = db.get("feature_usage") or []
         if usage:
-            lines.append("Feature usage: " + ", ".join(f"{escape(u['feature_key'])}={escape(u['used'])}" for u in usage))
+            lines.append("🧩 <b>Feature usage DB</b>")
+            for item in usage[:8]:
+                lines.append(f"• {escape(item['feature_key'])} — <b>{escape(item['used'])}</b>")
     return "\n".join(lines)
 
 

@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+import csv
+import datetime as dt
+import html
+import json
+import os
+from pathlib import Path
+import subprocess
+import urllib.request
+
+ENV_FILE = Path('/etc/agali-scraper.env')
+BASE = Path('/opt/agali-scraper')
+SUMMARY_JSON = BASE / 'run_summary.json'
+LOG_BASE = Path('/var/log/agali-scraper')
+CURRENT = LOG_BASE / 'current'
+STORES = ['YAYNO_BITAN_AND_CARREFOUR', 'HAZI_HINAM', 'HET_COHEN', 'MAHSANI_ASHUK', 'SUPER_PHARM', 'VICTORY', 'QUIK']
+
+
+def load_env():
+    if not ENV_FILE.exists():
+        return
+    for raw in ENV_FILE.read_text(encoding='utf-8', errors='replace').splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"'))
+
+
+def esc(value):
+    return html.escape('' if value is None else str(value), quote=False)
+
+
+def run_dir():
+    try:
+        if CURRENT.exists() or CURRENT.is_symlink():
+            return CURRENT.resolve()
+    except Exception:
+        pass
+    runs = sorted((LOG_BASE / 'runs').glob('*')) if (LOG_BASE / 'runs').exists() else []
+    return runs[-1] if runs else None
+
+
+def service_state():
+    proc = subprocess.run(
+        ['systemctl', 'show', 'agali-scraper-7.service', '-p', 'Result', '-p', 'ExecMainStatus', '--value'],
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    vals = [x.strip() for x in proc.stdout.splitlines() if x.strip()]
+    result = vals[0] if vals else 'unknown'
+    code = vals[1] if len(vals) > 1 else '0'
+    ok = result in ('success', 'exit-code') and code == '0'
+    return ok, result, code
+
+
+def read_csv(path):
+    if not path.exists():
+        return []
+    with path.open(newline='', encoding='utf-8', errors='replace') as handle:
+        return list(csv.DictReader(handle))
+
+
+def summarize(run):
+    rows = read_csv(run / 'pipeline_summary.csv') if run else []
+    stats = read_csv(run / 'pipeline_stats.csv') if run else []
+    ok, result, code = service_state()
+    failed = [r.get('store', '') for r in rows if r.get('w2_exit') not in ('0', '') or r.get('w3_exit') not in ('0', '')]
+    no_upload = [r.get('store', '') for r in rows if r.get('upload_data') in ('0', 'false', 'False', '')]
+    outputs = sum(int(r.get('outputs_count') or 0) for r in rows if str(r.get('outputs_count') or '').isdigit())
+
+    metric_totals = {}
+    metrics_by_store = {store: {} for store in STORES}
+    for row in stats:
+        store = row.get('store') or 'unknown'
+        metric = row.get('metric') or 'unknown'
+        try:
+            value = int(row.get('value') or 0)
+        except Exception:
+            continue
+        metric_totals[metric] = metric_totals.get(metric, 0) + value
+        metrics_by_store.setdefault(store, {})
+        metrics_by_store[store][metric] = metrics_by_store[store].get(metric, 0) + value
+
+    started = rows[0].get('started_at') if rows else None
+    finished = rows[-1].get('finished_at') if rows else None
+    data = {
+        'source': 'kamatera',
+        'host': subprocess.run(['hostname'], text=True, capture_output=True).stdout.strip(),
+        'status': 'success' if ok and not failed else 'failure',
+        'systemd_result': result,
+        'systemd_exit_code': code,
+        'store': ','.join(STORES),
+        'stores_total': len(STORES),
+        'stores_seen': len(rows),
+        'stores_failed': failed,
+        'stores_without_upload': no_upload,
+        'outputs_count': outputs,
+        'metrics': metric_totals,
+        'metrics_by_store': metrics_by_store,
+        'run_dir': str(run) if run else None,
+        'started_at': started,
+        'finished_at': finished,
+        'updated_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    SUMMARY_JSON.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return data
+
+
+def send(bot, text):
+    token = os.environ.get(f'TELEGRAM_{bot}_TOKEN')
+    chat = os.environ.get(f'TELEGRAM_{bot}_CHAT_ID')
+    if not token or not chat:
+        return False
+    payload = {'chat_id': chat, 'text': text[:3900], 'parse_mode': 'HTML', 'disable_web_page_preview': True}
+    req = urllib.request.Request(
+        f'https://api.telegram.org/bot{token}/sendMessage',
+        data=json.dumps(payload).encode(),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    urllib.request.urlopen(req, timeout=15).read()
+    return True
+
+
+def store_line(store, rows, data):
+    row = next((item for item in rows if item.get('store') == store), None)
+    if not row:
+        return f'⚠️ <b>{esc(store)}</b> — non lance / pas vu dans ce run'
+    metrics = (data.get('metrics_by_store') or {}).get(store) or {}
+    updated = sum(int(metrics.get(key) or 0) for key in ('price_rows', 'promo_rows', 'products_touched'))
+    if store in set(data.get('stores_failed') or []):
+        mark = '❌'
+        label = 'erreur'
+    elif store in set(data.get('stores_without_upload') or []):
+        mark = '⚠️'
+        label = 'aucune MAJ'
+    else:
+        mark = '✅'
+        label = 'ok'
+    return (
+        f'{mark} <b>{esc(store)}</b> — {label} | lignes: <b>{updated:,}</b> '
+        f'| outputs: <b>{esc(row.get("outputs_count") or 0)}</b>'
+    )
+
+
+def message(data, rows):
+    icon = '✅' if data['status'] == 'success' else '🚨'
+    metrics = data.get('metrics') or {}
+    metric_text = ', '.join(f'{esc(k)}={esc(v)}' for k, v in sorted(metrics.items())[:8]) or 'none'
+    lines = [
+        f'{icon} <b>Agali Scrapor</b> · Kamatera run complet',
+        f'Status: <b>{esc(data["status"])}</b> | host: {esc(data.get("host"))}',
+        f'Magasins vus: <b>{esc(data.get("stores_seen"))}/{esc(data.get("stores_total"))}</b> | outputs: <b>{esc(data.get("outputs_count"))}</b>',
+        '🧺 <b>Magasins Kamatera</b>',
+    ]
+    lines.extend(store_line(store, rows, data) for store in STORES)
+    lines.extend([
+        f'📊 Totaux: {metric_text}',
+        f'Run dir: <code>{esc(data.get("run_dir"))}</code>',
+    ])
+    return '\n'.join(lines)
+
+
+def main():
+    load_env()
+    run = run_dir()
+    rows = read_csv(run / 'pipeline_summary.csv') if run else []
+    data = summarize(run)
+    text = message(data, rows)
+    send('BOT1', text)
+    if data['status'] != 'success':
+        send('BOT2', text)
+
+
+if __name__ == '__main__':
+    main()

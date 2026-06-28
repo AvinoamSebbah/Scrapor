@@ -28,7 +28,7 @@ SECRET_GROUPS = {
     ],
     "database": ["POSTGRESQL_URL"],
     "github": ["GH_MONITOR_TOKEN"],
-    "digitalocean": ["DO_HOST", "DO_USERNAME", "DO_PORT", "DO_SSH_KEY"],
+    "digitalocean": ["DO_HOST", "DO_PORT", "DO_SSH_KEY"],
     "kamatera": ["KAMATERA_HOST", "KAMATERA_USER", "KAMATERA_SSH_KEY"],
     "posthog": ["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID", "POSTHOG_HOST"],
 }

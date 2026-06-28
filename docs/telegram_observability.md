@@ -138,9 +138,9 @@ chmod 600 ~/.ssh/authorized_keys
 Puis sur Kamatera:
 
 ```bash
-sudo mkdir -p /opt/agali-scrapor
-sudo git clone https://github.com/AvinoamSebbah/Scrapor.git /opt/agali-scrapor
-cd /opt/agali-scrapor
+sudo mkdir -p /opt/agali-scraper
+sudo git clone https://github.com/AvinoamSebbah/Scrapor.git /opt/agali-scraper
+cd /opt/agali-scraper
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -152,11 +152,11 @@ chmod +x scripts/run_kamatera_scrape.sh
 Cron exemple:
 
 ```cron
-15 */3 * * * cd /opt/agali-scrapor && . .venv/bin/activate && ./scripts/run_kamatera_scrape.sh /opt/agali-scrapor/kamatera.env
+15 */3 * * * cd /opt/agali-scraper && . .venv/bin/activate && ./scripts/run_kamatera_scrape.sh /opt/agali-scraper/kamatera.env
 ```
 
 Le wrapper ecrit:
-`/opt/agali-scrapor/run_summary.json`
+`/opt/agali-scraper/run_summary.json`
 
 Bot 2 lit ce fichier par SSH pour detecter un scraper bloque ou en erreur.
 

@@ -38,6 +38,7 @@ jobs:
           API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
           GH_MONITOR_TOKEN: ${{ secrets.GH_MONITOR_TOKEN }}
           DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USERNAME: ${{ secrets.DO_USERNAME }}
           DO_USER: ${{ secrets.DO_USERNAME }}
           DO_PORT: ${{ secrets.DO_PORT }}
           DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}

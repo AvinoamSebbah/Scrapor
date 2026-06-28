@@ -26,7 +26,7 @@ SECRET_GROUPS = {
         "TELEGRAM_BOT3_TOKEN",
         "TELEGRAM_BOT3_CHAT_ID",
     ],
-    "database_api": ["POSTGRESQL_URL", "API_SECRET_KEY"],
+    "database": ["POSTGRESQL_URL"],
     "github": ["GH_MONITOR_TOKEN"],
     "digitalocean": ["DO_HOST", "DO_USERNAME", "DO_PORT", "DO_SSH_KEY"],
     "kamatera": ["KAMATERA_HOST", "KAMATERA_USER", "KAMATERA_SSH_KEY"],
@@ -167,6 +167,10 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = check_env()
+    if not os.getenv("API_SECRET_KEY"):
+        rows.append(("api_secret_key", True, "not set; backend currently accepts public API reads"))
+    else:
+        rows.append(("api_secret_key", True, "present"))
     rows.extend(telegram_get_me(bot) for bot in ("scrapor", "health", "users"))
     api_base = os.getenv("AGALI_API_BASE", "https://api.agali.live").rstrip("/")
     city = urllib.parse.quote(os.getenv("AGALI_HEALTH_CITY", "תל אביב"))

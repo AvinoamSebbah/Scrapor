@@ -90,7 +90,7 @@ def ssh_check(prefix: str, label: str, summary_path: str | None = None) -> Check
     if not host or not key_file:
         return Check(label, False, f"{prefix}_HOST or {prefix}_SSH_KEY missing")
 
-    remote_summary = summary_path or os.getenv(f"{prefix}_SCRAPE_SUMMARY", "/opt/agali-scrapor/run_summary.json")
+    remote_summary = summary_path or os.getenv(f"{prefix}_SCRAPE_SUMMARY", "/opt/agali-scraper/run_summary.json")
     script = f"""
 set -e
 echo "host=$(hostname)"

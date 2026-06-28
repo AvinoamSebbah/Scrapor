@@ -73,3 +73,25 @@ jobs:
 
           echo "Le refresh a échoué après ${MAX_ATTEMPTS} tentatives."
           exit 1
+
+      - name: Send Bot 1 refresh summary
+        if: success()
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          python reports/scrape_report.py \
+            --source github \
+            --status success \
+            --title "W5 top promotions refresh" \
+            --workflow "W5_refresh_top_promos.yml" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send Bot 2 refresh failure alert
+        if: failure()
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+        run: |
+          python telegram_notify.py --bot health --message "🚨 <b>Agali Health</b> · W5 top promotions refresh failed\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

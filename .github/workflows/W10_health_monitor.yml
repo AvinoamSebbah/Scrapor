@@ -1,0 +1,49 @@
+name: "W10 · Agali Health Monitor"
+
+on:
+  schedule:
+    - cron: "20 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      always:
+        description: "Send OK report too"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      dry_run:
+        description: "Print Telegram payload instead of sending"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run health checks
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+          API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
+          GH_MONITOR_TOKEN: ${{ secrets.GH_MONITOR_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USER: ${{ secrets.DO_USERNAME }}
+          DO_PORT: ${{ secrets.DO_PORT }}
+          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+          KAMATERA_HOST: ${{ secrets.KAMATERA_HOST }}
+          KAMATERA_USER: ${{ secrets.KAMATERA_USER }}
+          KAMATERA_SSH_KEY: ${{ secrets.KAMATERA_SSH_KEY }}
+        run: |
+          ARGS=()
+          if [ "${{ inputs.always }}" = "true" ]; then ARGS+=(--always); fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
+          python reports/health_report.py "${ARGS[@]}"

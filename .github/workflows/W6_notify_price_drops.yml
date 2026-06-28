@@ -54,3 +54,25 @@ jobs:
           RESEND_FROM_EMAIL: "Agali Alerts <alerts@agali.live>"
           SITE_URL: 'https://agali.live'
         run: python notify_price_drops.py
+
+      - name: Send Bot 1 notification summary
+        if: success()
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          python reports/scrape_report.py \
+            --source github \
+            --status success \
+            --title "W6 price-drop notifications" \
+            --workflow "W6_notify_price_drops.yml" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send Bot 2 notification failure alert
+        if: failure()
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+        run: |
+          python telegram_notify.py --bot health --message "🚨 <b>Agali Health</b> · W6 price-drop notifications failed\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

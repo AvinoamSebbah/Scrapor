@@ -1,0 +1,54 @@
+name: "W12 · Observability Preflight"
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_test_messages:
+        description: "Send one real test message to each Telegram bot"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      dry_run:
+        description: "Print payloads instead of sending Telegram messages"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run observability preflight
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+          TELEGRAM_BOT3_TOKEN: ${{ secrets.TELEGRAM_BOT3_TOKEN }}
+          TELEGRAM_BOT3_CHAT_ID: ${{ secrets.TELEGRAM_BOT3_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
+          GH_MONITOR_TOKEN: ${{ secrets.GH_MONITOR_TOKEN }}
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USER: ${{ secrets.DO_USERNAME }}
+          DO_PORT: ${{ secrets.DO_PORT }}
+          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+          KAMATERA_HOST: ${{ secrets.KAMATERA_HOST }}
+          KAMATERA_USER: ${{ secrets.KAMATERA_USER }}
+          KAMATERA_SSH_KEY: ${{ secrets.KAMATERA_SSH_KEY }}
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ secrets.POSTHOG_PROJECT_ID }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          ARGS=()
+          if [ "${{ inputs.send_test_messages }}" = "true" ]; then ARGS+=(--send-test-messages); fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
+          python reports/observability_check.py "${ARGS[@]}"

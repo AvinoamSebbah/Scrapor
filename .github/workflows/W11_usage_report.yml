@@ -1,0 +1,49 @@
+name: "W11 · Agali Usage Telegram Report"
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print Telegram payload instead of sending"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  usage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Open PostgreSQL SSH tunnel
+        continue-on-error: true
+        uses: ./.github/actions/open-postgres-tunnel
+        with:
+          ssh-host: ${{ secrets.DO_HOST }}
+          ssh-user: ${{ secrets.DO_USERNAME }}
+          ssh-port: ${{ secrets.DO_PORT }}
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: Send usage report
+        env:
+          TELEGRAM_BOT3_TOKEN: ${{ secrets.TELEGRAM_BOT3_TOKEN }}
+          TELEGRAM_BOT3_CHAT_ID: ${{ secrets.TELEGRAM_BOT3_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+          POSTHOG_PERSONAL_API_KEY: ${{ secrets.POSTHOG_PERSONAL_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ secrets.POSTHOG_PROJECT_ID }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          ARGS=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
+          python reports/usage_report.py --hours 24 "${ARGS[@]}"

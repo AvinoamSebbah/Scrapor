@@ -134,3 +134,31 @@ jobs:
           TZ: Asia/Jerusalem
           PROCESSED_FILES_CACHE: ./processed_files_cache.json
         run: python main.py
+
+      - name: Send Bot 1 store upload summary
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          STATUS="success"
+          if [ "${{ job.status }}" != "success" ]; then STATUS="failure"; fi
+          python reports/scrape_report.py \
+            --source github \
+            --status "$STATUS" \
+            --title "W3 upload ${{ inputs.store }}" \
+            --workflow "W3_upload.yml" \
+            --store "${{ inputs.store }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --hours 6
+
+      - name: Send Bot 2 upload failure alert
+        if: failure()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+        run: |
+          python telegram_notify.py --bot health --message "🚨 <b>Agali Health</b> · W3 upload failed for <b>${{ inputs.store }}</b>\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

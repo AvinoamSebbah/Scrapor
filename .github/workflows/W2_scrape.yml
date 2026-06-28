@@ -252,3 +252,54 @@ jobs:
           gh workflow run W6_notify_price_drops.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
+
+  notify-result:
+    name: "Telegram summary"
+    needs: [prepare-processed-files-cache, scrape, wait-for-w3s]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Open PostgreSQL SSH tunnel
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/open-postgres-tunnel
+        with:
+          ssh-host: ${{ secrets.DO_HOST }}
+          ssh-user: ${{ secrets.DO_USERNAME }}
+          ssh-port: ${{ secrets.DO_PORT }}
+          ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+      - name: Send Bot 1 scrape summary
+        if: always()
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          STATUS="success"
+          if [ "${{ needs.prepare-processed-files-cache.result }}" != "success" ] || [ "${{ needs.scrape.result }}" != "success" ] || [ "${{ needs.wait-for-w3s.result }}" != "success" ]; then
+            STATUS="failure"
+          fi
+          python reports/scrape_report.py \
+            --source github \
+            --status "$STATUS" \
+            --title "W2 full scrape cycle" \
+            --workflow "W2_scrape.yml" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --hours 6
+
+      - name: Send Bot 2 failure alert
+        if: always() && (needs.prepare-processed-files-cache.result != 'success' || needs.scrape.result != 'success' || needs.wait-for-w3s.result != 'success')
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+        run: |
+          python telegram_notify.py --bot health --message "🚨 <b>Agali Health</b> · W2_scrape failed\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

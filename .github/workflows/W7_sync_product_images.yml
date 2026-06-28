@@ -121,3 +121,25 @@ jobs:
             ARGS+=(--limit "${{ inputs.limit }}")
           fi
           python sync_product_images.py "${ARGS[@]}"
+
+      - name: Send Bot 1 image sync summary
+        if: success()
+        env:
+          TELEGRAM_BOT1_TOKEN: ${{ secrets.TELEGRAM_BOT1_TOKEN }}
+          TELEGRAM_BOT1_CHAT_ID: ${{ secrets.TELEGRAM_BOT1_CHAT_ID }}
+          POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
+        run: |
+          python reports/scrape_report.py \
+            --source github \
+            --status success \
+            --title "W7 product image sync" \
+            --workflow "W7_sync_product_images.yml" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Send Bot 2 image sync failure alert
+        if: failure()
+        env:
+          TELEGRAM_BOT2_TOKEN: ${{ secrets.TELEGRAM_BOT2_TOKEN }}
+          TELEGRAM_BOT2_CHAT_ID: ${{ secrets.TELEGRAM_BOT2_CHAT_ID }}
+        run: |
+          python telegram_notify.py --bot health --message "🚨 <b>Agali Health</b> · W7 product image sync failed\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

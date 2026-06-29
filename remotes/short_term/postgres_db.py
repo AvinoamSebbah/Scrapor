@@ -612,7 +612,7 @@ class PostgresUploader(ShortTermDatabaseUploader):
         for chain_id in chain_ids:
             timeout_seconds = 300
             if chain_id == _SUPERPHARM_CHAIN_ID:
-                timeout_seconds = int(os.getenv("SUPERPHARM_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS", "1800"))
+                timeout_seconds = int(os.getenv("SUPERPHARM_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS", "7200"))
             try:
                 self._set_statement_timeout(timeout_seconds)
                 rows = self._run_query(

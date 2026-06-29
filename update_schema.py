@@ -1550,6 +1550,11 @@ def update_schema():
             weight_unit               = EXCLUDED.weight_unit,
             club_id                   = EXCLUDED.club_id,
             items                     = CASE
+              WHEN promotions.chain_id = '7290172900007' THEN
+                CASE
+                  WHEN promotions.items IS NULL OR promotions.items = '[]'::jsonb THEN EXCLUDED.items
+                  ELSE promotions.items
+                END
               WHEN promotions.items IS NULL OR promotions.items = '[]'::jsonb THEN EXCLUDED.items
               WHEN EXCLUDED.items IS NULL OR EXCLUDED.items = '[]'::jsonb THEN promotions.items
               WHEN promotions.items = EXCLUDED.items THEN promotions.items

@@ -53,6 +53,7 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_FROM_EMAIL: "Agali Alerts <alerts@agali.live>"
           SITE_URL: 'https://agali.live'
+          PRICE_DROP_SUMMARY_PATH: price_drop_summary.json
         run: python notify_price_drops.py
 
       - name: Send Bot 1 notification summary
@@ -67,7 +68,7 @@ jobs:
             --status success \
             --title "W6 price-drop notifications" \
             --workflow "W6_notify_price_drops.yml" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --summary-file price_drop_summary.json
 
       - name: Send Bot 2 notification failure alert
         if: failure()

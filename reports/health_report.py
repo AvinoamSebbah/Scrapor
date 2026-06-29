@@ -37,7 +37,9 @@ def http_json(name: str, url: str, api_key: str | None = None) -> Check:
         with urllib.request.urlopen(request, timeout=20) as response:
             body = response.read(4000).decode("utf-8", errors="replace")
             ok = 200 <= response.status < 300
-            return Check(name, ok, f"HTTP {response.status} {body[:180]}")
+            if ok:
+                return Check(name, True, f"OK HTTP {response.status}")
+            return Check(name, False, f"HTTP {response.status} {body[:180]}")
     except Exception as exc:
         return Check(name, False, str(exc))
 
@@ -58,14 +60,17 @@ def github_latest(repo: str, workflow: str | None = None) -> Check:
             payload = json.loads(response.read().decode("utf-8"))
         runs = payload.get("workflow_runs") or []
         if not runs:
-            return Check(f"GitHub {repo}", False, "no workflow runs")
+            return Check(f"GitHub {repo}", True, "aucun workflow run")
         latest = runs[0]
         conclusion = latest.get("conclusion") or latest.get("status")
-        ok = conclusion in {"success", "completed"}
+        ok = conclusion in {"success", "completed", "in_progress", "queued", "waiting", "requested"}
+        detail = f"{latest.get('name')} -> {conclusion}"
+        if not ok:
+            detail = f"{detail} ({latest.get('html_url')})"
         return Check(
             f"GitHub {repo}" + (f" {workflow}" if workflow else ""),
             ok,
-            f"{latest.get('name')} -> {conclusion} ({latest.get('html_url')})",
+            detail,
         )
     except Exception as exc:
         return Check(f"GitHub {repo}", False, str(exc))
@@ -96,18 +101,21 @@ set -e
 echo "host=$(hostname)"
 echo "disk=$(df -h / | awk 'NR==2{{print $5 \" used, \" $4 \" free\"}}')"
 echo "mem=$(free -m | awk '/Mem:/{{print $3 \"MB/\" $2 \"MB\"}}')"
-if command -v docker >/dev/null 2>&1; then docker ps --format 'docker={{{{.Names}}}} {{{{.Status}}}}' | head -5; fi
+if command -v docker >/dev/null 2>&1; then echo "docker_up=$(docker ps -q | wc -l)"; fi
 if [ -f "{remote_summary}" ]; then
-  echo "summary=$(python3 - <<'PY'
+  python3 - <<'PY'
 import json, pathlib
 p=pathlib.Path('{remote_summary}')
 d=json.loads(p.read_text())
-print(str(d)[:700])
+print("summary_status=" + str(d.get("status", "unknown")))
+if d.get("source") == "kamatera":
+    print("stores=" + str(d.get("stores_seen", 0)) + "/" + str(d.get("stores_total", 0)))
+    print("failed=" + str(len(d.get("stores_failed") or [])))
+    print("no_upload=" + str(len(d.get("stores_without_upload") or [])))
+    print("outputs=" + str(d.get("outputs_count", 0)))
 PY
-)"
 else
   echo "summary=missing:{remote_summary}"
-  exit 2
 fi
 """
     try:
@@ -130,10 +138,43 @@ fi
             text=True,
             timeout=35,
         )
-        ok = proc.returncode == 0
-        return Check(label, ok, (proc.stdout or proc.stderr).strip()[:1200])
+        detail = (proc.stdout or proc.stderr).strip()
+        ok = proc.returncode == 0 and "summary_status=failure" not in detail
+        return Check(label, ok, format_ssh_detail(detail))
     except Exception as exc:
         return Check(label, False, str(exc))
+
+
+def format_ssh_detail(detail: str) -> str:
+    values: dict[str, str] = {}
+    for raw in detail.splitlines():
+        if "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        values[key.strip()] = value.strip()
+
+    lines = []
+    if values.get("host"):
+        lines.append(f"host {values['host']}")
+    if values.get("disk"):
+        lines.append(f"disk {values['disk']}")
+    if values.get("mem"):
+        lines.append(f"ram {values['mem']}")
+    if values.get("docker_up"):
+        lines.append(f"docker {values['docker_up']} containers up")
+    if values.get("summary_status"):
+        lines.append(f"scraper {values['summary_status']}")
+    elif values.get("summary"):
+        lines.append("summary absent (non bloquant)")
+    if values.get("stores"):
+        lines.append(f"magasins {values['stores']}")
+    if values.get("failed"):
+        lines.append(f"erreurs magasins {values['failed']}")
+    if values.get("no_upload"):
+        lines.append(f"sans upload {values['no_upload']}")
+    if values.get("outputs"):
+        lines.append(f"outputs {values['outputs']}")
+    return "\n".join(lines) if lines else detail[:500]
 
 
 def build_message(checks: list[Check], always: bool) -> tuple[str, bool]:

@@ -21,11 +21,13 @@ import sys
 import hmac
 import base64
 import hashlib
+import json
 import logging
 import requests
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -45,8 +47,22 @@ MEDIA_BASE_URL = (os.environ.get("MEDIA_BASE_URL") or "https://agali-media.fra1.
 DO_SPACES_BUCKET = os.environ.get("DO_SPACES_BUCKET")
 IMGPROXY_KEY_HEX = os.environ.get("IMGPROXY_KEY")
 IMGPROXY_SALT_HEX = os.environ.get("IMGPROXY_SALT")
+PRICE_DROP_SUMMARY_PATH = Path(os.environ.get("PRICE_DROP_SUMMARY_PATH", "price_drop_summary.json"))
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
+
+
+def write_run_summary(**values) -> None:
+    summary = {
+        "status": values.get("status", "success"),
+        "active_observations": int(values.get("active_observations") or 0),
+        "qualifying_notifications": int(values.get("qualifying_notifications") or 0),
+        "observations_notified": int(values.get("observations_notified") or 0),
+        "emails_sent": int(values.get("emails_sent") or 0),
+        "reason": values.get("reason") or "",
+        "updated_at": datetime.now(ISRAEL_TZ).isoformat(),
+    }
+    PRICE_DROP_SUMMARY_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # ── Chain slug map (mirrors chainLogos.ts) ────────────────────────────────────
 
@@ -755,9 +771,11 @@ def send_email(to: str, subject: str, html: str) -> bool:
 def main():
     if not DATABASE_URL:
         log.error("DATABASE_URL / POSTGRESQL_URL not set.")
+        write_run_summary(status="failure", reason="DATABASE_URL missing")
         sys.exit(1)
 
     if not is_within_notification_window():
+        write_run_summary(reason="outside notification window")
         sys.exit(0)
 
     conn = get_connection()
@@ -785,6 +803,7 @@ def main():
 
         if not observations:
             log.info("No active observations — nothing to do.")
+            write_run_summary(reason="no active observations")
             return
 
         log.info(f"Loaded {len(observations)} active observation(s).")
@@ -933,6 +952,13 @@ def main():
 
         if not to_notify:
             log.info("No qualifying price drops — no emails to send.")
+            write_run_summary(
+                active_observations=len(observations),
+                qualifying_notifications=0,
+                observations_notified=0,
+                emails_sent=0,
+                reason="no qualifying price drops",
+            )
             return
 
         log.info(f"{len(to_notify)} notification(s) to send across {len({n['user_id'] for n in to_notify})} user(s).")
@@ -1006,10 +1032,17 @@ def main():
             log.info(f"Updated {len(sent_obs)} observation row(s).")
 
         log.info(f"Done — {emails_sent} email(s) sent.")
+        write_run_summary(
+            active_observations=len(observations),
+            qualifying_notifications=len(to_notify),
+            observations_notified=len(sent_obs),
+            emails_sent=emails_sent,
+        )
 
     except Exception as exc:
         conn.rollback()
         log.error(f"Fatal error: {exc}", exc_info=True)
+        write_run_summary(status="failure", reason=str(exc)[:300])
         sys.exit(1)
     finally:
         conn.close()

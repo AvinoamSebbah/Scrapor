@@ -80,7 +80,7 @@ def fetch_db_metrics(hours: int) -> dict[str, Any]:
                 cur.execute(
                     """
                     SELECT
-                      COALESCE(file_type, 'unknown') AS file_type,
+                      COALESCE(NULLIF(file_type, ''), 'unknown') AS file_type,
                       COALESCE(store_name, chain_name, chain_id, 'unknown') AS store,
                       COUNT(*)::int AS files,
                       COALESCE(SUM(record_count), 0)::bigint AS rows
@@ -98,7 +98,7 @@ def fetch_db_metrics(hours: int) -> dict[str, Any]:
                     """
                     SELECT
                       COALESCE(store_name, chain_name, chain_id, 'unknown') AS store,
-                      COALESCE(file_type, 'unknown') AS file_type,
+                      COALESCE(NULLIF(file_type, ''), 'unknown') AS file_type,
                       COUNT(*)::int AS files,
                       COALESCE(SUM(record_count), 0)::bigint AS rows
                     FROM processed_files
@@ -157,18 +157,59 @@ def format_db_block(metrics: dict[str, Any]) -> str:
     no_data_stores = [str(row["store"]) for row in rows if int(row.get("rows") or 0) == 0]
     by_type: dict[str, int] = {}
     for row in rows:
-        by_type[str(row["file_type"])] = by_type.get(str(row["file_type"]), 0) + int(row.get("rows") or 0)
+        file_type = str(row["file_type"] or "unknown")
+        by_type[file_type] = by_type.get(file_type, 0) + int(row.get("rows") or 0)
     type_text = ", ".join(f"{escape(k)}={v:,}" for k, v in sorted(by_type.items())) or "none"
 
     return "\n".join(
         [
-            f"📦 DB files: <b>{total_files}</b> | rows: <b>{total_records:,}</b>",
-            f"🧾 By type: {type_text}",
-            f"🛒 Products: <b>{escape(metrics.get('products'))}</b> | promos: <b>{escape(metrics.get('promotions'))}</b>",
-            f"💸 Prices: <b>{escape(metrics.get('product_prices'))}</b> | stores: <b>{escape(metrics.get('stores'))}</b>",
-            f"⚠️ No-row stores: {escape(short_list(no_data_stores))}",
+            "📊 <b>DB dernières heures</b>",
+            f"📦 Fichiers traités: <b>{total_files}</b> | lignes traitées: <b>{total_records:,}</b>",
+            f"🧾 Lignes par type: {type_text}",
+            f"🛒 Produits créés: <b>{escape(metrics.get('products'))}</b> | promos créées: <b>{escape(metrics.get('promotions'))}</b>",
+            f"💸 Prix touchés: <b>{escape(metrics.get('product_prices'))}</b> | magasins créés: <b>{escape(metrics.get('stores'))}</b>",
+            f"⚠️ Magasins sans ligne traitée: {escape(short_list(no_data_stores))}",
         ]
     )
+
+
+def fetch_notification_metrics() -> dict[str, Any]:
+    url = db_url()
+    if not url:
+        return {"available": False, "reason": "POSTGRESQL_URL missing"}
+    try:
+        with psycopg2.connect(url, connect_timeout=15, cursor_factory=psycopg2.extras.RealDictCursor) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)::bigint AS count
+                    FROM observations
+                    WHERE status = 'active'
+                      AND expires_at > NOW()
+                    """
+                )
+                return {"available": True, "active_observations": int(cur.fetchone()["count"])}
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
+
+
+def format_notification_block(summary: dict[str, Any]) -> str:
+    fallback = fetch_notification_metrics()
+    active = summary.get("active_observations")
+    if active is None and fallback.get("available"):
+        active = fallback.get("active_observations")
+    if active is None:
+        active = "unknown"
+
+    sent = summary.get("observations_notified", 0)
+    reason = summary.get("reason")
+    lines = [
+        f"📨 Notifications envoyées: <b>{escape(sent)}</b>",
+        f"⏳ Notifications inscrites en attente: <b>{escape(active)}</b>",
+    ]
+    if reason:
+        lines.append(f"ℹ️ Note: {escape(reason)}")
+    return "\n".join(lines)
 
 
 def github_json(path: str) -> dict[str, Any] | None:
@@ -282,12 +323,20 @@ def format_kamatera_store_lines(summary: dict[str, Any]) -> str:
 def build_message(args: argparse.Namespace) -> str:
     os.environ["ENABLED_STORES"] = args.enabled_stores or ""
     summary = read_summary(args.summary_file)
-    metrics = fetch_db_metrics(args.hours)
     status = args.status or summary.get("status") or "unknown"
     icon = "✅" if status == "success" else "❌" if status == "failure" else "ℹ️"
     title = args.title or ("Kamatera scrape" if args.source == "kamatera" else "GitHub scrape")
     host = summary.get("host") or socket.gethostname()
 
+    if args.workflow == "W6_notify_price_drops.yml":
+        return "\n".join(
+            [
+                f"{icon} <b>Agali Scrapor</b> · {escape(title)}",
+                format_notification_block(summary),
+            ]
+        )
+
+    metrics = fetch_db_metrics(args.hours)
     parts = [
         f"{icon} <b>Agali Scrapor</b> · {escape(title)}",
         f"Source: <b>{escape(args.source)}</b> | status: <b>{escape(status)}</b>",

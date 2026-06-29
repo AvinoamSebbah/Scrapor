@@ -39,10 +39,10 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRESQL_URL")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-RESEND_FROM = os.environ.get("RESEND_FROM_EMAIL", "Agali Alerts <alerts@agali.live>")
-SITE_URL = os.environ.get("SITE_URL", "https://agali.live")
+RESEND_FROM = os.environ.get("RESEND_FROM_EMAIL", "Agali Alerts <alerts@agali.co.il>")
+SITE_URL = os.environ.get("SITE_URL", "https://agali.co.il")
 VERIFY_TLS = os.environ.get("SKIP_TLS_VERIFY", "").lower() != "true"
-IMGPROXY_BASE_URL = (os.environ.get("IMGPROXY_BASE_URL") or "https://img.agali.live").rstrip("/")
+IMGPROXY_BASE_URL = (os.environ.get("IMGPROXY_BASE_URL") or "https://img.agali.co.il").rstrip("/")
 MEDIA_BASE_URL = (os.environ.get("MEDIA_BASE_URL") or "https://agali-media.fra1.digitaloceanspaces.com").rstrip("/")
 DO_SPACES_BUCKET = os.environ.get("DO_SPACES_BUCKET")
 IMGPROXY_KEY_HEX = os.environ.get("IMGPROXY_KEY")
@@ -341,7 +341,7 @@ def should_hide_promo_when_conditional_filter_off(
 _PRODUCT_IMAGE_URL_CACHE: dict[str, str | None] = {}
 _IMAGE_REACHABILITY_CACHE: dict[str, bool] = {}
 _IMAGE_REQUEST_HEADERS = {
-    "User-Agent": "AgaliBot/1.0 (+https://agali.live)",
+    "User-Agent": "AgaliBot/1.0 (+https://agali.co.il)",
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 }
 

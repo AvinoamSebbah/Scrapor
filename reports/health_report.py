@@ -195,7 +195,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    api_base = os.getenv("AGALI_API_BASE", "https://api.agali.live").rstrip("/")
+    api_base = os.getenv("AGALI_API_BASE", "https://api.agali.co.il").rstrip("/")
     api_key = os.getenv("API_SECRET_KEY")
     default_city = urllib.parse.quote(os.getenv("AGALI_HEALTH_CITY", "תל אביב"))
     checks = [

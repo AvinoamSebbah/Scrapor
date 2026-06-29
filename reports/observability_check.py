@@ -172,7 +172,7 @@ def main() -> int:
     else:
         rows.append(("api_secret_key", True, "present"))
     rows.extend(telegram_get_me(bot) for bot in ("scrapor", "health", "users"))
-    api_base = os.getenv("AGALI_API_BASE", "https://api.agali.live").rstrip("/")
+    api_base = os.getenv("AGALI_API_BASE", "https://api.agali.co.il").rstrip("/")
     city = urllib.parse.quote(os.getenv("AGALI_HEALTH_CITY", "תל אביב"))
     rows.append(http_check("api_health", f"{api_base}/health"))
     rows.append(

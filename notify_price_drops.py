@@ -181,6 +181,7 @@ STRINGS = {
         "base": "מחיר רגיל",
         "promo": "מחיר מבצע",
         "discount": "הנחה",
+        "city": "עיר",
         "view": "צפה במוצר",
         "footer_unsub": "קיבלת מייל זה כי נרשמת להתראות מחיר ב-Agali.",
         "footer_link": "לניהול ההתראות שלך",
@@ -194,6 +195,7 @@ STRINGS = {
         "base": "Regular price",
         "promo": "Sale price",
         "discount": "Discount",
+        "city": "City",
         "view": "View product",
         "footer_unsub": "You received this email because you subscribed to price alerts on Agali.",
         "footer_link": "Manage your alerts",
@@ -207,6 +209,7 @@ STRINGS = {
         "base": "Prix habituel",
         "promo": "Prix promotionnel",
         "discount": "Réduction",
+        "city": "Ville",
         "view": "Voir le produit",
         "footer_unsub": "Vous avez reçu cet email car vous êtes abonné·e aux alertes de prix Agali.",
         "footer_link": "Gérer vos alertes",
@@ -462,7 +465,11 @@ def build_html_email(user_name: str, lang: str, products: list[dict]) -> str:
 
     product_cards = ""
     for p in products:
+        city_param = quote(str(p.get("city") or ""), safe="")
+        city_display = _esc(str(p.get("city") or ""))
         product_url = f"{SITE_URL}/product/{p['item_code']}"
+        if city_param:
+            product_url = f"{product_url}?city={city_param}"
         img_url = product_image_url(p["item_code"])
         if img_url:
             product_image_cell = f"""
@@ -588,6 +595,7 @@ def build_html_email(user_name: str, lang: str, products: list[dict]) -> str:
                     <div class="product-name" style="font-size:13px;font-weight:700;
                       color:#ffffff;line-height:1.35;">{_esc(p['item_name'])}</div>
                   </a>
+                  {f'<div style="margin-top:5px;font-size:11px;font-weight:700;color:#8b8bc7;">{s["city"]}: {city_display}</div>' if city_display else ''}
                 </td>
               </tr>
               <!-- Store rows separator -->

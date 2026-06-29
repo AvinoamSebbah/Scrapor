@@ -74,6 +74,7 @@ _PRODUCT_SEARCH_STATS_FULL_REBUILD_THRESHOLD = int(
 )
 _TOP_PROMOS_CACHE_DEFAULT_WINDOW_HOURS = int(os.getenv("TOP_PROMOS_CACHE_WINDOW_HOURS", "0"))
 _TOP_PROMOS_CACHE_DEFAULT_TOP_N = int(os.getenv("TOP_PROMOS_CACHE_TOP_N", "200"))
+_SUPERPHARM_CHAIN_ID = "7290172900007"
 
 
 class PostgresUploader(ShortTermDatabaseUploader):
@@ -367,6 +368,9 @@ class PostgresUploader(ShortTermDatabaseUploader):
                 return cur.fetchall()
         return []
 
+    def _set_statement_timeout(self, seconds: int) -> None:
+        self._run_query("SET statement_timeout = %s", (f"{max(int(seconds), 1)}s",))
+
     def _ensure_maintenance_state_table(self):
         self._run_query(
             """
@@ -606,7 +610,11 @@ class PostgresUploader(ShortTermDatabaseUploader):
     def _refresh_promotion_store_items_for_chains(self, chain_ids: list[str]) -> int:
         refreshed_total = 0
         for chain_id in chain_ids:
+            timeout_seconds = 300
+            if chain_id == _SUPERPHARM_CHAIN_ID:
+                timeout_seconds = int(os.getenv("SUPERPHARM_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS", "1800"))
             try:
+                self._set_statement_timeout(timeout_seconds)
                 rows = self._run_query(
                     "SELECT refresh_promotion_store_items(%s) AS affected",
                     (chain_id,),
@@ -615,6 +623,11 @@ class PostgresUploader(ShortTermDatabaseUploader):
                 refreshed_total += int(rows[0].get("affected", 0)) if rows else 0
             except Exception as e:
                 Logger.warning("Failed to refresh promotion_store_items for chain %s: %s", chain_id, e)
+            finally:
+                try:
+                    self._set_statement_timeout(300)
+                except Exception as e:
+                    Logger.warning("Failed to restore statement_timeout: %s", e)
         return refreshed_total
 
     def _refresh_top_promotions_cache(self, window_hours: int, top_n: int) -> int:

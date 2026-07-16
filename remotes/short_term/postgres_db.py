@@ -75,6 +75,8 @@ _PRODUCT_SEARCH_STATS_FULL_REBUILD_THRESHOLD = int(
 _TOP_PROMOS_CACHE_DEFAULT_WINDOW_HOURS = int(os.getenv("TOP_PROMOS_CACHE_WINDOW_HOURS", "0"))
 _TOP_PROMOS_CACHE_DEFAULT_TOP_N = int(os.getenv("TOP_PROMOS_CACHE_TOP_N", "200"))
 _SUPERPHARM_CHAIN_ID = "7290172900007"
+_SHUFERSAL_CHAIN_ID = "7290027600007"
+_PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS = 300
 
 
 class PostgresUploader(ShortTermDatabaseUploader):
@@ -371,6 +373,45 @@ class PostgresUploader(ShortTermDatabaseUploader):
     def _set_statement_timeout(self, seconds: int) -> None:
         self._run_query("SET statement_timeout = %s", (f"{max(int(seconds), 1)}s",))
 
+    @staticmethod
+    def _promotion_refresh_timeout_seconds(chain_id: str) -> int:
+        env_name = "PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS"
+        default_seconds = _PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS
+        if chain_id == _SUPERPHARM_CHAIN_ID:
+            env_name = "SUPERPHARM_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS"
+            default_seconds = 7200
+        elif chain_id == _SHUFERSAL_CHAIN_ID:
+            env_name = "SHUFERSAL_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS"
+            default_seconds = 7200
+
+        raw_value = os.getenv(env_name, str(default_seconds))
+        try:
+            timeout_seconds = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{env_name} must be a positive integer, got {raw_value!r}") from exc
+        if timeout_seconds <= 0:
+            raise ValueError(f"{env_name} must be a positive integer, got {raw_value!r}")
+        return timeout_seconds
+
+    def _promotion_refresh_scope_stats(self, chain_id: str) -> list[dict]:
+        return self._run_query(
+            """
+            SELECT
+              COALESCE(NULLIF(BTRIM(s.chain_name), ''), '<unknown>') AS chain_name,
+              COUNT(*)::INT AS row_count,
+              COUNT(DISTINCT psi.promotion_id)::INT AS promotion_count,
+              MIN(psi.updated_at) AS oldest_updated_at,
+              MAX(psi.updated_at) AS newest_updated_at
+            FROM promotion_store_items psi
+            JOIN stores s ON s.id = psi.store_id
+            WHERE psi.chain_id = %s
+            GROUP BY COALESCE(NULLIF(BTRIM(s.chain_name), ''), '<unknown>')
+            ORDER BY chain_name
+            """,
+            (chain_id,),
+            fetch=True,
+        )
+
     def _ensure_maintenance_state_table(self):
         self._run_query(
             """
@@ -610,24 +651,62 @@ class PostgresUploader(ShortTermDatabaseUploader):
     def _refresh_promotion_store_items_for_chains(self, chain_ids: list[str]) -> int:
         refreshed_total = 0
         for chain_id in chain_ids:
-            timeout_seconds = 300
-            if chain_id == _SUPERPHARM_CHAIN_ID:
-                timeout_seconds = int(os.getenv("SUPERPHARM_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS", "7200"))
+            timeout_seconds = self._promotion_refresh_timeout_seconds(chain_id)
+            refresh_error = None
             try:
                 self._set_statement_timeout(timeout_seconds)
+                started_rows = self._run_query("SELECT LOCALTIMESTAMP AS started_at", fetch=True)
+                started_at = started_rows[0].get("started_at") if started_rows else None
                 rows = self._run_query(
                     "SELECT refresh_promotion_store_items(%s) AS affected",
                     (chain_id,),
                     fetch=True,
                 )
-                refreshed_total += int(rows[0].get("affected", 0)) if rows else 0
+                affected = int(rows[0].get("affected", 0)) if rows else 0
+                scope_stats = self._promotion_refresh_scope_stats(chain_id)
+
+                if affected > 0 and not scope_stats:
+                    raise RuntimeError(
+                        f"promotion_store_items refresh returned rows but materialized no scopes for chain {chain_id}"
+                    )
+
+                stale_scopes = [
+                    str(row.get("chain_name"))
+                    for row in scope_stats
+                    if started_at is not None
+                    and row.get("oldest_updated_at") is not None
+                    and row["oldest_updated_at"] < started_at
+                ]
+                if stale_scopes:
+                    raise RuntimeError(
+                        f"promotion_store_items refresh left stale subchains for chain {chain_id}: "
+                        f"{', '.join(stale_scopes)}"
+                    )
+
+                for scope in scope_stats:
+                    Logger.info(
+                        "Promotion refresh scope chain=%s chain_name=%s rows=%d promotions=%d newest=%s",
+                        chain_id,
+                        scope.get("chain_name"),
+                        int(scope.get("row_count", 0)),
+                        int(scope.get("promotion_count", 0)),
+                        scope.get("newest_updated_at"),
+                    )
+                refreshed_total += affected
             except Exception as e:
-                Logger.warning("Failed to refresh promotion_store_items for chain %s: %s", chain_id, e)
+                refresh_error = e
+                Logger.error("Failed to refresh promotion_store_items for chain %s: %s", chain_id, e)
             finally:
                 try:
-                    self._set_statement_timeout(300)
+                    self._set_statement_timeout(_PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS)
                 except Exception as e:
-                    Logger.warning("Failed to restore statement_timeout: %s", e)
+                    Logger.error("Failed to restore statement_timeout: %s", e)
+                    if refresh_error is None:
+                        refresh_error = e
+            if refresh_error is not None:
+                raise RuntimeError(
+                    f"promotion_store_items refresh failed for chain {chain_id}"
+                ) from refresh_error
         return refreshed_total
 
     def _refresh_top_promotions_cache(self, window_hours: int, top_n: int) -> int:
@@ -1281,10 +1360,12 @@ class PostgresUploader(ShortTermDatabaseUploader):
         self._test_connection()
 
     def close(self):
+        promotion_refresh_error = None
         try:
             self._flush_pending_promotion_refresh()
         except Exception as e:
-            Logger.warning("Deferred promotion_store_items refresh failed during close: %s", e)
+            promotion_refresh_error = e
+            Logger.error("Deferred promotion_store_items refresh failed during close: %s", e)
         try:
             self._flush_pending_product_search_stats()
         except Exception as e:
@@ -1294,6 +1375,8 @@ class PostgresUploader(ShortTermDatabaseUploader):
         except Exception as e:
             Logger.warning("Deferred stores cleanup failed during close: %s", e)
         self._close_connection()
+        if promotion_refresh_error is not None:
+            raise RuntimeError("Deferred promotion refresh failed") from promotion_refresh_error
 
     def __del__(self):
         self._close_connection()

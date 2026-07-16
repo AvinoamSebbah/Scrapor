@@ -106,6 +106,7 @@ jobs:
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
           BATCH_SIZE_PROMOS: '50'
+          SHUFERSAL_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS: '7200'
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ inputs.store }}
           APP_DATA_PATH: ./app_data
@@ -127,6 +128,7 @@ jobs:
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           ANALYZE_PRODUCTS_MIN_INTERVAL_MINUTES: '15'
           BATCH_SIZE_PROMOS: '50'
+          SHUFERSAL_PROMO_REFRESH_STATEMENT_TIMEOUT_SECONDS: '7200'
           OPERATION: api_update
           ENABLED_SCRAPERS: ${{ inputs.store }}
           APP_DATA_PATH: ./app_data

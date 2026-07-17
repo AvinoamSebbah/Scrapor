@@ -77,6 +77,14 @@ _TOP_PROMOS_CACHE_DEFAULT_TOP_N = int(os.getenv("TOP_PROMOS_CACHE_TOP_N", "200")
 _SUPERPHARM_CHAIN_ID = "7290172900007"
 _SHUFERSAL_CHAIN_ID = "7290027600007"
 _PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS = 300
+_PROMO_JSON_BATCH_MAX_BYTES = int(
+    os.getenv("PROMO_JSON_BATCH_MAX_BYTES", str(64 * 1024 * 1024))
+)
+_PROMO_ITEM_CODE_KEYS = {
+    "itemcode",
+    "item_code",
+    "barcode",
+}
 
 
 class PostgresUploader(ShortTermDatabaseUploader):
@@ -185,21 +193,86 @@ class PostgresUploader(ShortTermDatabaseUploader):
         }
 
     @staticmethod
-    def _append_unique_promo_items(existing, incoming):
+    def _promo_item_key(item):
+        return json.dumps(
+            item,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    @classmethod
+    def _normalize_nested_promo_items(cls, value):
+        """Flatten nested promotion groups into exact, unique item objects.
+
+        Shufersal repeats the complete ``groups`` tree for many stores. Keeping
+        those wrappers in the chain-level promotion row makes the JSON grow on
+        every upload. The materializer consumes the item objects themselves via
+        recursive JSON paths, so retaining each distinct leaf preserves its
+        pricing/quantity fields without retaining duplicate group wrappers.
+        """
+        if value is None:
+            return []
+
+        leaves = []
+
+        def visit(node):
+            if isinstance(node, dict):
+                normalized_keys = {str(key).lower() for key in node}
+                if normalized_keys & _PROMO_ITEM_CODE_KEYS:
+                    leaves.append(node)
+                    return
+                for child in node.values():
+                    visit(child)
+            elif isinstance(node, list):
+                for child in node:
+                    visit(child)
+
+        visit(value)
+        source_items = leaves if leaves else (value if isinstance(value, list) else [value])
+        unique_items = []
+        seen = set()
+        for item in source_items:
+            key = cls._promo_item_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_items.append(item)
+        if leaves:
+            # merge_promotions normally deduplicates top-level objects by
+            # itemcode. A Shufersal item may legitimately have several pricing
+            # variants, so keep the code one level lower and let the SQL
+            # fallback deduplicate each wrapper by its exact JSON value.
+            return [{"item": item} for item in unique_items]
+        return unique_items
+
+    @staticmethod
+    def _contains_promo_item_leaf(value):
+        if isinstance(value, dict):
+            if {str(key).lower() for key in value} & _PROMO_ITEM_CODE_KEYS:
+                return True
+            return any(PostgresUploader._contains_promo_item_leaf(child) for child in value.values())
+        if isinstance(value, list):
+            return any(PostgresUploader._contains_promo_item_leaf(child) for child in value)
+        return False
+
+    @classmethod
+    def _append_unique_promo_items(cls, existing, incoming, seen=None):
         if not incoming:
             return existing or []
         if not existing:
+            if seen is not None:
+                seen.update(cls._promo_item_key(item) for item in incoming)
             return incoming
 
         existing_items = existing if isinstance(existing, list) else [existing]
         incoming_items = incoming if isinstance(incoming, list) else [incoming]
-        seen = {
-            json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
-            for item in existing_items
-        }
+        if seen is None:
+            seen = {cls._promo_item_key(item) for item in existing_items}
         changed = False
         for item in incoming_items:
-            key = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            key = cls._promo_item_key(item)
             if key not in seen:
                 existing_items.append(item)
                 seen.add(key)
@@ -566,9 +639,23 @@ class PostgresUploader(ShortTermDatabaseUploader):
         batch_size = _BATCH_SIZE_PROMOS if func_name == "merge_promotions" else _BATCH_SIZE_PRICES
         waits = [5, 10, 20, 40]
 
-        for i in range(0, len(records), batch_size):
-            chunk = records[i : i + batch_size]
-            payload = json.dumps(chunk, ensure_ascii=False)
+        is_shufersal_promo_batch = (
+            func_name == "merge_promotions"
+            and all(record.get("chain_id") == _SHUFERSAL_CHAIN_ID for record in records)
+        )
+        if is_shufersal_promo_batch:
+            payloads = self._iter_json_payloads(
+                records,
+                max_records=batch_size,
+                max_bytes=_PROMO_JSON_BATCH_MAX_BYTES,
+            )
+        else:
+            payloads = (
+                json.dumps(records[i : i + batch_size], ensure_ascii=False)
+                for i in range(0, len(records), batch_size)
+            )
+
+        for payload in payloads:
             for attempt in range(5):
                 try:
                     self._run_query(
@@ -590,6 +677,39 @@ class PostgresUploader(ShortTermDatabaseUploader):
                         e,
                     )
                     time.sleep(wait)
+
+    @staticmethod
+    def _iter_json_payloads(records, max_records: int, max_bytes: int):
+        """Yield JSON arrays bounded by both record count and UTF-8 size."""
+        if max_records <= 0 or max_bytes <= 0:
+            raise ValueError("JSON batch limits must be positive")
+
+        encoded_records = []
+        encoded_bytes = 2  # opening and closing brackets
+        for record in records:
+            encoded = json.dumps(
+                record,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            record_bytes = len(encoded.encode("utf-8"))
+            separator_bytes = 1 if encoded_records else 0
+            exceeds_limit = (
+                len(encoded_records) >= max_records
+                or encoded_bytes + separator_bytes + record_bytes > max_bytes
+            )
+            if encoded_records and exceeds_limit:
+                yield "[" + ",".join(encoded_records) + "]"
+                encoded_records = []
+                encoded_bytes = 2
+                separator_bytes = 0
+
+            encoded_records.append(encoded)
+            encoded_bytes += separator_bytes + record_bytes
+
+        if encoded_records:
+            yield "[" + ",".join(encoded_records) + "]"
 
     def _fetch_all_pages(self, table: str, columns: str) -> list:
         """Fetch every row from ``table`` using LIMIT/OFFSET pagination."""
@@ -1137,6 +1257,78 @@ class PostgresUploader(ShortTermDatabaseUploader):
     # promotions
     # ------------------------------------------------------------------
 
+    def _compact_shufersal_promotion_items(self, promotion_ids) -> int:
+        """Replace legacy nested Shufersal groups with unique item leaves.
+
+        This is intentionally limited to touched Shufersal promotions whose
+        top-level array still contains ``group`` wrappers. Already-normalized
+        rows and every other chain are left untouched.
+        """
+        promotion_ids = sorted({str(value) for value in promotion_ids if value})
+        if not promotion_ids:
+            return 0
+
+        timeout_seconds = self._promotion_refresh_timeout_seconds(_SHUFERSAL_CHAIN_ID)
+        self._set_statement_timeout(timeout_seconds)
+        try:
+            candidates = self._run_query(
+                """
+                SELECT p.promotion_id
+                FROM promotions p
+                WHERE p.chain_id = %s
+                  AND p.promotion_id = ANY(%s::TEXT[])
+                  AND jsonb_typeof(p.items) = 'array'
+                  AND jsonb_path_exists(p.items, '$[*].group')
+                ORDER BY p.promotion_id
+                """,
+                (_SHUFERSAL_CHAIN_ID, promotion_ids),
+                fetch=True,
+            )
+            compacted = 0
+            for candidate in candidates:
+                promotion_id = str(candidate["promotion_id"])
+                rows = self._run_query(
+                    """
+                    SELECT items
+                    FROM promotions
+                    WHERE chain_id = %s AND promotion_id = %s
+                    """,
+                    (_SHUFERSAL_CHAIN_ID, promotion_id),
+                    fetch=True,
+                )
+                if not rows:
+                    continue
+
+                normalized = self._normalize_nested_promo_items(rows[0]["items"])
+                if not normalized or not all(
+                    self._contains_promo_item_leaf(item)
+                    for item in normalized
+                ):
+                    Logger.warning(
+                        "Skipping Shufersal promotion %s compaction: no item leaves found",
+                        promotion_id,
+                    )
+                    continue
+
+                payload = json.dumps(
+                    normalized,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                )
+                self._run_query(
+                    """
+                    UPDATE promotions
+                    SET items = %s::jsonb
+                    WHERE chain_id = %s AND promotion_id = %s
+                    """,
+                    (payload, _SHUFERSAL_CHAIN_ID, promotion_id),
+                )
+                compacted += 1
+            return compacted
+        finally:
+            self._set_statement_timeout(_PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS)
+
     def _upsert_promos(self, items):
         """Map and upsert promotions."""
         self._ensure_stores_exist(items)
@@ -1156,6 +1348,7 @@ class PostgresUploader(ShortTermDatabaseUploader):
         now = datetime.now()
         now_iso = now.isoformat()
         aggregated: dict = {}
+        promo_item_keys: dict = {}
 
         for item in items:
             content = item.get("content", {})
@@ -1192,6 +1385,8 @@ class PostgresUploader(ShortTermDatabaseUploader):
             if not promotion_items:
                 promo_item = self._build_promo_item_from_row(content, details)
                 promotion_items = [promo_item] if promo_item else []
+            elif chain_id == _SHUFERSAL_CHAIN_ID:
+                promotion_items = self._normalize_nested_promo_items(promotion_items)
 
             row = {
                 "chain_id": chain_id,
@@ -1286,6 +1481,10 @@ class PostgresUploader(ShortTermDatabaseUploader):
 
             if key not in aggregated:
                 aggregated[key] = row
+                promo_item_keys[key] = {
+                    self._promo_item_key(promo_item)
+                    for promo_item in promotion_items
+                }
             else:
                 aggregated[key]["store_promotions"][db_store_key] = store_promo_val
                 if db_store_key not in aggregated[key]["available_in_store_ids"]:
@@ -1293,6 +1492,7 @@ class PostgresUploader(ShortTermDatabaseUploader):
                 aggregated[key]["items"] = self._append_unique_promo_items(
                     aggregated[key].get("items"),
                     promotion_items,
+                    seen=promo_item_keys[key],
                 )
                 for field, value in row.items():
                     if field in {"chain_id", "promotion_id", "items", "store_promotions", "available_in_store_ids"}:
@@ -1305,6 +1505,19 @@ class PostgresUploader(ShortTermDatabaseUploader):
 
         if not aggregated:
             return
+
+        shufersal_promotion_ids = [
+            promotion_id
+            for chain_id, promotion_id in aggregated
+            if chain_id == _SHUFERSAL_CHAIN_ID
+        ]
+        if shufersal_promotion_ids:
+            compacted = self._compact_shufersal_promotion_items(shufersal_promotion_ids)
+            if compacted:
+                Logger.info(
+                    "Compacted legacy nested items for %d Shufersal promotion(s)",
+                    compacted,
+                )
 
         Logger.info("Merging %d promotions via PostgreSQL function", len(aggregated))
         self._rpc_batch("merge_promotions", list(aggregated.values()))

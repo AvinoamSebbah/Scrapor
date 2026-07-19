@@ -90,7 +90,6 @@ CHAIN_SLUG_MAP: dict[str, str] = {
     'סיטי מרקט': 'city-market',
     'סיטי צפריר בע"מ': 'city-tzafrir',
     'פוליצר': 'politzer',
-    'פז קמעונאות ואנרגיה בע"מ': 'paz',
     'פרש מרקט': 'fresh-market',
     'קי טי יבוא ושווק בע"מ': 'kt-import',
     'רמי לוי בשכונה': 'rami-levy-bashchuna',
@@ -129,7 +128,6 @@ CHAIN_ID_SLUG_MAP: dict[str, str] = {
     '7290058158628': 'yesh',
     '7290058266241': 'city-tzafrir',
     '7290058289400': 'kt-import',
-    '7290644700005': 'paz',
     '5144744100002': 'mishnat-yosef',
 }
 

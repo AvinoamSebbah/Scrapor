@@ -34,6 +34,7 @@ jobs:
 
   upload:
     name: "Upload ${{ inputs.store }} -> PostgreSQL"
+    if: ${{ inputs.store != 'YELLOW' }}
     # needs: postgres_preflight
     runs-on: ubuntu-latest
     permissions:

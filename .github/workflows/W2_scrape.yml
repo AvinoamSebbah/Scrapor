@@ -5,7 +5,7 @@ name: "W2 · Scrape"
 # CONNECTION GUARANTEE:
 #   Job 1 - prepare-processed-files-cache: reuses upstream cache artifact,
 #     and only performs one PostgreSQL fetch for manual fallback runs.
-#   Jobs 2-36 – scrape (35 parallel): NO database connection whatsoever.
+#   Jobs 2-35 – scrape (34 parallel): NO database connection whatsoever.
 #     Output goes to local files; W3 handles all PostgreSQL writes.
 # Each store job dispatches its own W3 upload workflow as soon as it finishes.
 
@@ -115,7 +115,6 @@ jobs:
           - QUIK
           - TIV_TAAM
           - VICTORY
-          - YELLOW
           - YOHANANOF
           - ZOL_VEBEGADOL
           - WOLT
@@ -154,7 +153,7 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           OUTPUT_DESTINATION: file
-          PROCESSED_FILES_CACHE: ./processed_files_cache.json  # avoids 35 parallel PostgreSQL queries
+          PROCESSED_FILES_CACHE: ./processed_files_cache.json  # avoids 34 parallel PostgreSQL queries
           OPERATION: scraping,converting,clean_dump_files
           ENABLED_SCRAPERS: ${{ matrix.store }}
           ENABLED_FILE_TYPES: ${{ inputs.enabled_file_types }}

@@ -52,7 +52,6 @@ GITHUB_STORES = [
     "QUIK",
     "TIV_TAAM",
     "VICTORY",
-    "YELLOW",
     "YOHANANOF",
     "ZOL_VEBEGADOL",
     "WOLT",

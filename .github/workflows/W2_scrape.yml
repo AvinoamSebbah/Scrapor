@@ -229,7 +229,7 @@ jobs:
         run: |
           W2_CREATED_AT=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.created_at')
           echo "Waiting for W3_upload runs from this W2 cycle (${W2_CREATED_AT}) to complete..."
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             PENDING=$(gh api "/repos/${{ github.repository }}/actions/workflows/W3_upload.yml/runs?per_page=100" \
               --jq "[.workflow_runs[] | select(.created_at >= \"$W2_CREATED_AT\" and (.status == \"in_progress\" or .status == \"queued\" or .status == \"waiting\"))] | length")
 
@@ -238,10 +238,10 @@ jobs:
               exit 0
             fi
 
-            echo "W3 pending=$PENDING. Waiting 60s... (attempt $i/60)"
+            echo "W3 pending=$PENDING. Waiting 60s... (attempt $i/180)"
             sleep 60
           done
-          echo "Timeout after 60 min waiting for W3 runs from this W2 cycle."
+          echo "Timeout after 180 min waiting for W3 runs from this W2 cycle."
           exit 1
 
       - name: Dispatch W6 price-drop notifications

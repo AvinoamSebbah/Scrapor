@@ -201,9 +201,12 @@ def format_notification_block(summary: dict[str, Any]) -> str:
         active = "unknown"
 
     sent = summary.get("observations_notified", 0)
+    emails_sent = summary.get("emails_sent", 0)
+    pushes_sent = summary.get("pushes_sent", 0)
     reason = summary.get("reason")
     lines = [
         f"📨 Notifications envoyées: <b>{escape(sent)}</b>",
+        f"✉️ Emails: <b>{escape(emails_sent)}</b> · 📱 Push ciblés: <b>{escape(pushes_sent)}</b>",
         f"⏳ Notifications inscrites en attente: <b>{escape(active)}</b>",
     ]
     if reason:

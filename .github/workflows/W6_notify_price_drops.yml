@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   notify:
-    name: "Send price-drop emails"
+    name: "Send price-drop emails and targeted pushes"
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -52,6 +52,8 @@ jobs:
           POSTGRESQL_URL: ${{ secrets.POSTGRESQL_URL }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_FROM_EMAIL: "Agali Alerts <alerts@agali.live>"
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_PROJECT_ID: 'agali-34afb'
           SITE_URL: 'https://agali.live'
           PRICE_DROP_SUMMARY_PATH: price_drop_summary.json
         run: python notify_price_drops.py

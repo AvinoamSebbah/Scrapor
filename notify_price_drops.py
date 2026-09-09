@@ -1,5 +1,5 @@
 """
-W6 — Price-drop notification mailer.
+W6 — Price-drop email and native push notifier.
 Runs after W2 (full scrape).
 
 Logic:
@@ -11,8 +11,9 @@ Logic:
      promo_price <= target_price (or fall back to pct-based check).
   5. Group by user → fetch user emails + language preferences.
   6. Build one HTML email per user — one card per product, multi-store rows.
-  7. Send via Resend.
-  8. Bulk-update observations (last_notified_price, last_notified_at, promo_expires_at).
+  7. Send the existing email and, when available, an FCM push to the exact
+     devices registered for that user.
+  8. Bulk-update observations only after at least one delivery succeeds.
 """
 
 import os
@@ -48,6 +49,8 @@ DO_SPACES_BUCKET = os.environ.get("DO_SPACES_BUCKET")
 IMGPROXY_KEY_HEX = os.environ.get("IMGPROXY_KEY")
 IMGPROXY_SALT_HEX = os.environ.get("IMGPROXY_SALT")
 PRICE_DROP_SUMMARY_PATH = Path(os.environ.get("PRICE_DROP_SUMMARY_PATH", "price_drop_summary.json"))
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID")
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -59,6 +62,7 @@ def write_run_summary(**values) -> None:
         "qualifying_notifications": int(values.get("qualifying_notifications") or 0),
         "observations_notified": int(values.get("observations_notified") or 0),
         "emails_sent": int(values.get("emails_sent") or 0),
+        "pushes_sent": int(values.get("pushes_sent") or 0),
         "reason": values.get("reason") or "",
         "updated_at": datetime.now(ISRAEL_TZ).isoformat(),
     }
@@ -772,6 +776,120 @@ def send_email(to: str, subject: str, html: str) -> bool:
         return False
 
 
+# ── Firebase Cloud Messaging sender ──────────────────────────────────────────
+
+_fcm_credentials = None
+
+
+def _firebase_credentials():
+    global _fcm_credentials
+    if _fcm_credentials is not None:
+        return _fcm_credentials
+    if not FIREBASE_SERVICE_ACCOUNT_JSON:
+        return None
+
+    try:
+        from google.oauth2 import service_account
+
+        info = json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
+        if isinstance(info.get("private_key"), str):
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+        _fcm_credentials = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/firebase.messaging"],
+        )
+        return _fcm_credentials
+    except Exception as exc:
+        log.error(f"Firebase credentials are invalid — push disabled: {exc}")
+        return None
+
+
+def load_push_tokens(conn, user_ids: list[str]) -> dict[str, list[str]]:
+    """Load only device tokens owned by the users qualifying in this W6 run."""
+    from collections import defaultdict
+
+    by_user: dict[str, list[str]] = defaultdict(list)
+    if not user_ids or not FIREBASE_SERVICE_ACCOUNT_JSON:
+        return by_user
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.push_devices') AS table_name")
+        if not cur.fetchone()["table_name"]:
+            log.info("push_devices table not installed yet — email delivery continues unchanged.")
+            return by_user
+
+        placeholders = ", ".join(["%s"] * len(user_ids))
+        cur.execute(
+            f"""SELECT user_id, token
+                FROM push_devices
+                WHERE enabled = TRUE
+                  AND user_id IN ({placeholders})""",
+            user_ids,
+        )
+        for row in cur.fetchall():
+            by_user[row["user_id"]].append(row["token"])
+    return by_user
+
+
+def send_push(token: str, title: str, body: str, data: dict[str, str]) -> tuple[bool, bool]:
+    """Return (sent, token_invalid). No topics or broadcast targets are used."""
+    credentials = _firebase_credentials()
+    if credentials is None:
+        return False, False
+
+    try:
+        if not credentials.valid or credentials.expired:
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+            credentials.refresh(GoogleAuthRequest())
+        project_id = FIREBASE_PROJECT_ID or credentials.project_id
+        if not project_id:
+            log.error("Firebase project id missing — push disabled.")
+            return False, False
+
+        response = requests.post(
+            f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send",
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json; UTF-8",
+            },
+            json={
+                "message": {
+                    "token": token,
+                    "notification": {"title": title, "body": body},
+                    "data": {key: str(value) for key, value in data.items()},
+                    "android": {
+                        "priority": "HIGH",
+                        "notification": {"channel_id": "agali_alerts"},
+                    },
+                }
+            },
+            timeout=15,
+            verify=VERIFY_TLS,
+        )
+        if response.status_code == 200:
+            return True, False
+
+        response_text = response.text[:500]
+        token_invalid = response.status_code == 404 and "UNREGISTERED" in response_text
+        log.error(f"FCM error {response.status_code}: {response_text}")
+        return False, token_invalid
+    except Exception as exc:
+        log.error(f"FCM request failed: {exc}")
+        return False, False
+
+
+def build_push_copy(lang: str, notifs: list[dict]) -> tuple[str, str]:
+    s = STRINGS[lang]
+    if len(notifs) == 1:
+        notif = notifs[0]
+        title = s["subject_single"].format(name=notif["item_name"][:30])
+        body = f"{notif['city']} · ₪{notif['best_promo_price']:.2f}"
+    else:
+        title = s["subject_multi"].format(n=len(notifs))
+        body = s["intro"]
+    return title, body
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -963,6 +1081,7 @@ def main():
                 qualifying_notifications=0,
                 observations_notified=0,
                 emails_sent=0,
+                pushes_sent=0,
                 reason="no qualifying price drops",
             )
             return
@@ -992,9 +1111,15 @@ def main():
         for n in to_notify:
             grouped[n["user_id"]].append(n)
 
-        # ── 7. Send one email per user ────────────────────────────────────────
+        # Tokens are queried only for users who have qualifying observations.
+        # There is deliberately no FCM topic/broadcast path in this workflow.
+        push_tokens_by_user = load_push_tokens(conn, user_ids)
+
+        # ── 7. Send one email per user and optional per-device pushes ─────────
         sent_obs: list[tuple] = []  # (obs_id, best_promo_price, best_promo_end)
         emails_sent = 0
+        pushes_sent = 0
+        invalid_push_tokens: list[str] = []
 
         for user_id, notifs in grouped.items():
             udata = user_map.get(user_id)
@@ -1011,15 +1136,52 @@ def main():
                 subject = s["subject_multi"].format(n=len(notifs))
 
             html = build_html_email(udata["name"], lang, notifs)
-            ok = send_email(udata["email"], subject, html)
+            email_ok = send_email(udata["email"], subject, html)
 
-            if ok:
+            if email_ok:
                 emails_sent += 1
                 log.info(f"✅ Email sent to {udata['email']} ({len(notifs)} product(s))")
+            else:
+                log.warning(f"⚠️  Failed to send email to {udata['email']}")
+
+            push_ok = False
+            push_title, push_body = build_push_copy(lang, notifs)
+            first_notif = notifs[0]
+            for device_token in push_tokens_by_user.get(user_id, []):
+                sent, token_invalid = send_push(
+                    device_token,
+                    push_title,
+                    push_body,
+                    {
+                        "type": "price_drop",
+                        "path": f"/product/{first_notif['item_code']}?city={quote(first_notif['city'])}",
+                        "item_code": first_notif["item_code"],
+                        "notification_count": str(len(notifs)),
+                    },
+                )
+                if sent:
+                    pushes_sent += 1
+                    push_ok = True
+                if token_invalid:
+                    invalid_push_tokens.append(device_token)
+
+            if push_ok:
+                log.info(f"✅ Push sent to user {user_id} ({len(notifs)} product(s))")
+
+            # Email remains the source of truth for delivery for now. Push is
+            # additive and must not change the existing retry/update semantics.
+            if email_ok:
                 for n in notifs:
                     sent_obs.append((n["obs_id"], n["best_promo_price"], n["best_promo_end"]))
-            else:
-                log.warning(f"⚠️  Failed to send to {udata['email']}")
+
+        if invalid_push_tokens:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE push_devices
+                       SET enabled = FALSE, updated_at = NOW()
+                       WHERE token = ANY(%s)""",
+                    (invalid_push_tokens,),
+                )
 
         # ── 8. Bulk-update sent observations ──────────────────────────────────
         if sent_obs:
@@ -1034,15 +1196,18 @@ def main():
                        WHERE id = %s""",
                     [(price, end, oid) for oid, price, end in sent_obs],
                 )
-            conn.commit()
             log.info(f"Updated {len(sent_obs)} observation row(s).")
 
-        log.info(f"Done — {emails_sent} email(s) sent.")
+        if sent_obs or invalid_push_tokens:
+            conn.commit()
+
+        log.info(f"Done — {emails_sent} email(s), {pushes_sent} push(es) sent.")
         write_run_summary(
             active_observations=len(observations),
             qualifying_notifications=len(to_notify),
             observations_notified=len(sent_obs),
             emails_sent=emails_sent,
+            pushes_sent=pushes_sent,
         )
 
     except Exception as exc:

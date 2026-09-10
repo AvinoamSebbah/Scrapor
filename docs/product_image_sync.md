@@ -16,26 +16,25 @@ python sync_product_images.py
 
 - `sync_product_images.py` : le workflow manuel
 - `scripts/add_products_has_image.sql` : migration one-shot dédiée
-- `.github/workflows/W7_sync_product_images.yml` : lancement manuel ou automatique une fois par jour à 03:00 `Asia/Jerusalem` depuis GitHub Actions
+- `.github/workflows/W7_sync_product_images.yml` : orchestration nocturne par GitHub Actions, avec exécution réelle sur Kamatera en Israël
 
-Le workflow `W7` utilise un groupe `concurrency` dédié avec `cancel-in-progress: false` :
-si un nouveau déclenchement arrive alors que le précédent n'est pas terminé, GitHub Actions
-le garde en attente au lieu de lancer deux synchronisations en parallèle.
+Le workflow `W7` utilise un groupe `concurrency` dédié avec `cancel-in-progress: true` :
+un nouveau lancement remplace un ancien lancement GitHub encore en cours. Un verrou `flock`
+sur Kamatera empêche aussi deux synchronisations d'images de s'exécuter simultanément.
 
-Comme GitHub Actions planifie les crons en UTC, `W7` déclare les créneaux `00:00 UTC`
-et `01:00 UTC`, puis une garde exécute seulement celui qui correspond à 03:00
-en heure locale `Asia/Jerusalem` (été ou hiver).
+Comme GitHub Actions planifie les crons en UTC, `W7` démarre à `22:00 UTC`, soit
+`01:00` en Israël l'été et `00:00` l'hiver.
 
 Ordre du workflow :
 
-1. préflight obligatoire `Pricez → Cloudinary bridge → Spaces`
-2. préflight obligatoire `OpenFoodFacts → Cloudinary bridge → Spaces`
+1. préflight obligatoire `Pricez → Spaces` depuis Kamatera
+2. préflight obligatoire `OpenFoodFacts → Spaces` depuis Kamatera
 3. scan du préfixe `products/` dans DigitalOcean Spaces
 4. marquage `TRUE` des produits déjà présents
 5. pour les autres produits :
    - tentative Pricez
    - sinon tentative OpenFoodFacts
-   - si une image est trouvée, import via Cloudinary bridge puis upload vers Spaces
+   - si une image est trouvée, téléchargement direct depuis Kamatera puis upload vers Spaces
    - si aucune source ne possède l'image, marquage `FALSE`
 
 Le script ne stocke pas d'URL signée : le chemin durable reste `products/{barcode}.jpg`.
@@ -50,15 +49,12 @@ Le script ne stocke pas d'URL signée : le chemin durable reste `products/{barco
 | `--recheck-non-ean-false` | répare les anciens `FALSE` non-EAN écrits avant que Pricez soit tenté pour eux |
 | `--limit N` | limite le nombre de produits traités |
 | `--dry-run` | exécute le flux sans écrire dans la DB |
-| `--preflight-only` | teste uniquement le bridge et l'upload Space, puis s'arrête |
+| `--preflight-only` | teste uniquement les sources directes et l'upload Space, puis s'arrête |
 | `--progress-every N` | affiche un résumé compact toutes les `N` lignes (défaut : `100`) |
 
 ## Variables requises
 
 - `POSTGRESQL_URL` ou `DATABASE_URL`
-- `CLOUDINARY_CLOUD_NAME`
-- `CLOUDINARY_API_KEY`
-- `CLOUDINARY_API_SECRET`
 - `DO_SPACES_ACCESS_KEY`
 - `DO_SPACES_SECRET_KEY`
 - `DO_SPACES_BUCKET`
@@ -73,14 +69,12 @@ Optionnelle :
 Le workflow référence uniquement des secrets GitHub, jamais des valeurs écrites dans le code :
 
 - `POSTGRESQL_URL`
-- `CLOUDINARY_CLOUD_NAME`
-- `CLOUDINARY_API_KEY`
-- `CLOUDINARY_API_SECRET`
 - `DO_SPACES_ACCESS_KEY`
 - `DO_SPACES_SECRET_KEY`
 - `DO_SPACES_BUCKET`
 - `DO_SPACES_REGION`
 - les secrets SSH déjà utilisés par tes autres workflows (`DO_HOST`, `DO_USERNAME`, `DO_PORT`, `DO_SSH_KEY`)
+- les secrets Kamatera (`KAMATERA_HOST`, `KAMATERA_USER`, `KAMATERA_SSH_KEY`)
 
 ## Migration initiale
 
@@ -101,7 +95,7 @@ Le script écrit `FALSE` seulement si :
 3. OpenFoodFacts n'a fourni aucune image sélectionnée **ou** a répondu `429`.
 
 Si Pricez échoue techniquement, le produit reste `NULL`.
-Les autres erreurs OpenFoodFacts, ainsi que les erreurs de bridge/réseau/upload, gardent aussi le produit à `NULL`.
+Les autres erreurs OpenFoodFacts, ainsi que les erreurs réseau/upload, gardent aussi le produit à `NULL`.
 
 ## Logs utiles pendant un run
 

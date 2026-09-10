@@ -6,12 +6,12 @@ Workflow manuel pour peupler products.has_image, qui devient la source de vérit
 DB sur l'existence d'une image produit.
 
 Ordre normal :
-  1. Préflight obligatoire du pipeline bridge + upload Space
+  1. Préflight obligatoire du pipeline direct + upload Space
   2. Vérification des images déjà présentes dans DigitalOcean Spaces
   3. Pour les produits encore inconnus :
      - Pricez
      - puis OpenFoodFacts
-     - image importée via le bridge Cloudinary
+     - image téléchargée directement depuis le serveur israélien
      - puis copiée dans DigitalOcean Spaces sous products/{barcode}.jpg
   4. Mise à jour de products.has_image :
      - TRUE si image déjà trouvée dans Spaces ou importée avec succès
@@ -38,9 +38,6 @@ from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
 import boto3
-import cloudinary
-import cloudinary.uploader
-import cloudinary.utils
 import psycopg2
 import requests
 from botocore.exceptions import ClientError
@@ -55,6 +52,7 @@ PRICEZ_PREFLIGHT_BARCODE = "7290012901355"
 OPENFOODFACTS_PREFLIGHT_BARCODE = "3017620422003"
 DEFAULT_BATCH_SIZE = 250
 DEFAULT_REQUEST_TIMEOUT = 20
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 DEFAULT_USER_AGENT = "Agali-image-sync/1.0 (https://agali.co.il)"
 DEFAULT_PROGRESS_EVERY = 100
 
@@ -125,23 +123,6 @@ def _connect():
     )
     conn.autocommit = False
     return conn
-
-
-def _configure_cloudinary(insecure_tls: bool) -> None:
-    cloudinary.config(
-        cloud_name=_env("CLOUDINARY_CLOUD_NAME"),
-        api_key=_env("CLOUDINARY_API_KEY"),
-        api_secret=_env("CLOUDINARY_API_SECRET"),
-        secure=True,
-    )
-    if insecure_tls:
-        # Usage local uniquement. Le SDK Cloudinary construit son PoolManager à
-        # l'import ; il faut le recréer explicitement pour respecter ce mode.
-        cloudinary.CERT_KWARGS = {"cert_reqs": "CERT_NONE"}
-        cloudinary.uploader._http = cloudinary.utils.get_http_connector(
-            cloudinary.config(),
-            cloudinary.CERT_KWARGS,
-        )
 
 
 def _build_s3_client(insecure_tls: bool):
@@ -346,26 +327,6 @@ def _openfoodfacts_front_image_url(session: requests.Session, barcode: str) -> s
     return _pick_openfoodfacts_front_image(product)
 
 
-def _bridge_remote_image(remote_url: str, public_id: str) -> str:
-    try:
-        result = cloudinary.uploader.upload(
-            remote_url,
-            public_id=public_id,
-            folder="spaces-bridge",
-            overwrite=True,
-            invalidate=False,
-            resource_type="image",
-            timeout=60,
-        )
-    except Exception as exc:  # SDK raises provider-specific exceptions
-        raise TemporaryImageSyncError(f"Cloudinary bridge failed: {exc}") from exc
-
-    secure_url = result.get("secure_url")
-    if not secure_url:
-        raise TemporaryImageSyncError("Cloudinary bridge did not return secure_url")
-    return str(secure_url)
-
-
 def _upload_remote_image_to_spaces(
     session: requests.Session,
     s3_client,
@@ -375,21 +336,39 @@ def _upload_remote_image_to_spaces(
     source: str,
 ) -> None:
     try:
-        response = session.get(remote_url, timeout=DEFAULT_REQUEST_TIMEOUT)
+        response = session.get(remote_url, stream=True, timeout=DEFAULT_REQUEST_TIMEOUT)
     except requests.RequestException as exc:
-        raise TemporaryImageSyncError(f"Cloudinary download failed: {exc}") from exc
+        raise TemporaryImageSyncError(f"{source} download failed: {exc}") from exc
 
-    if response.status_code != 200:
-        raise TemporaryImageSyncError(f"Cloudinary download returned status {response.status_code}")
-    content_type = str(response.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
-    if not content_type.startswith("image/"):
-        raise TemporaryImageSyncError(f"Cloudinary returned non-image content-type {content_type}")
+    with response:
+        if response.status_code != 200:
+            raise TemporaryImageSyncError(f"{source} download returned status {response.status_code}")
+        content_type = str(response.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            raise TemporaryImageSyncError(f"{source} returned non-image content-type {content_type}")
+
+        content_length = response.headers.get("content-length")
+        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+            raise TemporaryImageSyncError(f"{source} image exceeds {MAX_IMAGE_BYTES} bytes")
+
+        chunks: list[bytes] = []
+        downloaded = 0
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            downloaded += len(chunk)
+            if downloaded > MAX_IMAGE_BYTES:
+                raise TemporaryImageSyncError(f"{source} image exceeds {MAX_IMAGE_BYTES} bytes")
+            chunks.append(chunk)
+        image_bytes = b"".join(chunks)
+        if not image_bytes:
+            raise TemporaryImageSyncError(f"{source} returned an empty image")
 
     try:
         s3_client.put_object(
             Bucket=bucket,
             Key=key,
-            Body=response.content,
+            Body=image_bytes,
             ContentType=content_type,
             CacheControl="public, max-age=31536000, immutable",
             Metadata={"fetched_from": source},
@@ -408,33 +387,31 @@ def _delete_preflight_object(s3_client, bucket: str, key: str) -> None:
 
 
 def _run_preflight(session: requests.Session, s3_client, bucket: str) -> None:
-    _banner("Préflight bridge + Spaces")
+    _banner("Préflight sources directes + Spaces")
     run_id = uuid.uuid4().hex[:12]
 
     pricez_source = _check_pricez_source(session, PRICEZ_PREFLIGHT_BARCODE)
     if not pricez_source:
         raise RuntimeError("Préflight Pricez impossible : l'image de référence est introuvable")
-    pricez_bridged = _bridge_remote_image(pricez_source, "preflight-pricez")
     pricez_key = f"{PREFLIGHT_PREFIX}pricez-{run_id}.jpg"
-    _upload_remote_image_to_spaces(session, s3_client, bucket, pricez_key, pricez_bridged, "preflight-pricez")
+    _upload_remote_image_to_spaces(session, s3_client, bucket, pricez_key, pricez_source, "preflight-pricez")
     _delete_preflight_object(s3_client, bucket, pricez_key)
-    print("  ✅ Pricez → Cloudinary bridge → Spaces")
+    print("  ✅ Pricez → Spaces (accès direct)")
 
     off_source = _openfoodfacts_front_image_url(session, OPENFOODFACTS_PREFLIGHT_BARCODE)
     if not off_source:
         raise RuntimeError("Préflight OpenFoodFacts impossible : l'image de référence est introuvable")
-    off_bridged = _bridge_remote_image(off_source, "preflight-openfoodfacts")
     off_key = f"{PREFLIGHT_PREFIX}openfoodfacts-{run_id}.jpg"
     _upload_remote_image_to_spaces(
         session,
         s3_client,
         bucket,
         off_key,
-        off_bridged,
+        off_source,
         "preflight-openfoodfacts",
     )
     _delete_preflight_object(s3_client, bucket, off_key)
-    print("  ✅ OpenFoodFacts → Cloudinary bridge → Spaces")
+    print("  ✅ OpenFoodFacts → Spaces (accès direct)")
 
 
 def _try_persist_from_source(
@@ -446,13 +423,12 @@ def _try_persist_from_source(
     source_url: str,
 ) -> bool:
     try:
-        bridged_url = _bridge_remote_image(source_url, f"{source_name}-{barcode}")
         _upload_remote_image_to_spaces(
             session,
             s3_client,
             bucket,
             f"{SPACE_PRODUCTS_PREFIX}{barcode}{SPACE_IMAGE_SUFFIX}",
-            bridged_url,
+            source_url,
             source_name,
         )
         return True
@@ -618,7 +594,7 @@ def main() -> None:
     parser.add_argument(
         "--preflight-only",
         action="store_true",
-        help="Teste uniquement Pricez/OpenFoodFacts → Cloudinary bridge → Spaces puis s'arrête.",
+        help="Teste uniquement Pricez/OpenFoodFacts → Spaces en direct puis s'arrête.",
     )
     parser.add_argument(
         "--insecure-tls",
@@ -639,12 +615,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _configure_cloudinary(args.insecure_tls)
     bucket = _env("DO_SPACES_BUCKET")
     session = _build_http_session(args.insecure_tls)
     s3_client = _build_s3_client(args.insecure_tls)
 
-    # Préflight AVANT toute mutation DB : si le bridge est cassé, on ne touche rien.
+    # Préflight AVANT toute mutation DB : si le chemin direct est cassé, on ne touche rien.
     _run_preflight(session, s3_client, bucket)
     if args.preflight_only:
         print("\n✅  Préflight terminé avec succès. Aucun accès DB effectué.")

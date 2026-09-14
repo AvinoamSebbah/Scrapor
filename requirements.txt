@@ -14,9 +14,11 @@ kafka-python==2.0.2
 six>=1.16.0
 mockafka-py==0.2.1
 requests>=2.32.2 # not directly required, pinned by Snyk to avoid a vulnerability
+beautifulsoup4>=4.12,<5
 google-auth>=2.40.0,<3
 urllib3>=2.5.0 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
 python-logging-discord-handler==0.1.5
 psycopg2-binary==2.9.9
 boto3==1.43.9
+duckdb>=1.5,<2

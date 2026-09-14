@@ -5,10 +5,12 @@ import json
 import math
 import os
 import time
+import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
+import requests
 from psycopg2 import sql
 from psycopg2.extras import Json, RealDictCursor, execute_values
 
@@ -77,6 +79,31 @@ _TOP_PROMOS_CACHE_DEFAULT_TOP_N = int(os.getenv("TOP_PROMOS_CACHE_TOP_N", "200")
 _SUPERPHARM_CHAIN_ID = "7290172900007"
 _SHUFERSAL_CHAIN_ID = "7290027600007"
 _PROMO_REFRESH_DEFAULT_TIMEOUT_SECONDS = 300
+_CBS_LOCALITY_CACHE: dict[str, str | None] = {}
+
+
+def _resolve_store_city(value):
+    """Turn an official CBS locality code into its Hebrew name before first INSERT."""
+    raw = str(value or '').strip()
+    code = raw[:-2] if raw.endswith('.0') else raw
+    if code == '0':
+        return None
+    if not re.fullmatch(r'\d{1,4}', code):
+        return value
+    if code not in _CBS_LOCALITY_CACHE:
+        try:
+            response = requests.get(
+                f'https://api.cbs.gov.il/Dictionary/Geo/localities/{code}',
+                headers={'User-Agent': 'AgaliStoreImporter/1.0 (+https://agali.co.il)'}, timeout=8,
+            )
+            response.raise_for_status()
+            items = response.json()['dictionary']['data']['localities']['items']
+            locality = items['localities'] if isinstance(items, dict) else items[0]['localities']
+            _CBS_LOCALITY_CACHE[code] = locality.get('name_heb')
+        except Exception as error:
+            Logger.warning('Could not resolve CBS locality code %s: %s', code, error)
+            _CBS_LOCALITY_CACHE[code] = None
+    return _CBS_LOCALITY_CACHE[code] or value
 
 
 class PostgresUploader(ShortTermDatabaseUploader):
@@ -504,6 +531,7 @@ class PostgresUploader(ShortTermDatabaseUploader):
         on_conflict: str,
         ignore_duplicates: bool = False,
         batch_size: int = _BATCH_SIZE_DEFAULT,
+        preserve_existing: set[str] | None = None,
     ) -> None:
         """Upsert ``records`` into ``table`` in safe-sized batches."""
         if not records:
@@ -511,7 +539,11 @@ class PostgresUploader(ShortTermDatabaseUploader):
 
         columns = list(records[0].keys())
         conflict_columns = [c.strip() for c in on_conflict.split(",") if c.strip()]
-        update_columns = [c for c in columns if c not in conflict_columns and c != "created_at"]
+        preserved = preserve_existing or set()
+        update_columns = [
+            c for c in columns
+            if c not in conflict_columns and c != "created_at" and c not in preserved
+        ]
 
         insert_sql = sql.SQL("INSERT INTO {table} ({cols}) VALUES %s ").format(
             table=sql.Identifier(table),
@@ -967,7 +999,11 @@ class PostgresUploader(ShortTermDatabaseUploader):
                 "store_type": self._get_val(content, "StoreType"),
                 "store_name": self._get_val(content, "StoreName") or self._get_val(content, "StoreNm"),
                 "address": self._get_val(content, "Address") or self._get_val(content, "Addr"),
-                "city": self._get_val(content, "City"),
+                "city": _resolve_store_city(
+                    self._get_val(content, "CityName")
+                    or self._get_val(content, "CityNm")
+                    or self._get_val(content, "City")
+                ),
                 "zip_code": self._get_val(content, "ZipCode"),
                 "created_at": now,
                 "updated_at": now,
@@ -977,7 +1013,16 @@ class PostgresUploader(ShortTermDatabaseUploader):
             return
 
         Logger.info("Upserting %d stores via PostgreSQL", len(records_dict))
-        self._upsert_batch("stores", list(records_dict.values()), on_conflict="chain_id,store_id")
+        # City and address are curated independently and must remain stable across
+        # source-file refreshes. New stores still receive both values on INSERT.
+        # Geocoding columns are intentionally absent from records_dict, so this upsert can
+        # never overwrite the persistent coordinates or their verification status.
+        self._upsert_batch(
+            "stores",
+            list(records_dict.values()),
+            on_conflict="chain_id,store_id",
+            preserve_existing={"city", "address"},
+        )
         self.seen_stores.update(records_dict.keys())
         cleanup_mode = os.getenv("STORES_CLEANUP_MODE", "deferred").strip().lower()
         if cleanup_mode == "immediate":
